@@ -1,6 +1,9 @@
 # Ubuntu
 Linux Ubuntu Start Commands
 
+
+## Firewall
+
 (for servers)
 ```bash
 sudo ufw allow ssh
@@ -12,6 +15,8 @@ sudo ufw default deny incoming
 ```bash
 sudo ufw enable
 ```
+
+## DNSCRYPT
 
 ```bash
 sudo apt update
@@ -36,6 +41,7 @@ Add to /etc/resolv.conf:
 nameserver 127.0.2.1
 ```
 
+## Tor
 
 ```bash
 sudo apt install tor
@@ -52,8 +58,10 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
-
 This way you setup DNS server on your Ubuntu on port 53 and Transparent proxy: 127.0.0.1:9040 (if dnscrypt-proxy fails)
+
+
+## Fail2BAN
 
 ```bash
 sudo apt install fail2ban

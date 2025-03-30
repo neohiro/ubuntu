@@ -16,6 +16,8 @@ sudo ufw default deny incoming
 sudo ufw enable
 ```
 
+Go through updates setup of your device & Ubuntu Pro.
+
 ## DNSCRYPT
 
 ```bash

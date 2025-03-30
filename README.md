@@ -1,5 +1,5 @@
-# ubuntu
-Linux Ubuntu Start Commands
+# Linux Ubuntu
+Commands after installation:
 
 ```bash
 sudo ufw allow ssh

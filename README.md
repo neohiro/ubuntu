@@ -76,6 +76,7 @@ Turn proxy settings on (!)
 
 ## Fail2BAN
 
+(only if you use remote ssh)
 ```bash
 sudo apt install fail2ban
 ```

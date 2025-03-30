@@ -73,3 +73,5 @@ Turn your proxy settings on (!)
 ```bash
 sudo apt install fail2ban
 ```
+
+Check directory for other Linux Ubuntu terminal tutorials.

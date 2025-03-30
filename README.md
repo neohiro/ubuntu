@@ -65,7 +65,8 @@ TransPort 9040
 DNSPort 53
 ```
 This way you setup DNS server on your Ubuntu on port 53 and Transparent proxy: 127.0.0.1:9040 (if dnscrypt-proxy fails)
-Turn your proxy settings on.
+
+Turn your proxy settings on(!)
 
 ## Fail2BAN
 

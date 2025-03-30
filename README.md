@@ -40,7 +40,7 @@ sudo systemctl restart NetworkManager
 ```
 
 
-Set nameserver 127.0.2.1 (in NetworkManager and/or add to /etc/resolv.conf)
+Set nameserver 127.0.2.1 (in Network Manager and/or add to /etc/resolv.conf)
 ```
 sudo nano /etc/resolv.conf
 ```
@@ -70,7 +70,7 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
-That completes the setup of a DNS server on port 53 (when dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
+That completes the setup of a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
 
 Turn proxy settings on (!)
 

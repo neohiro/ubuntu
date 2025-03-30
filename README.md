@@ -57,9 +57,6 @@ sudo apt install tor
 ```bash
 sudo systemctl enable tor
 ```
-```bash
-sudo systemctl restart tor
-```
 
 Add to tor/torrc to route ALL traffic through tor:
 ```
@@ -73,7 +70,10 @@ DNSPort 53
 ```
 That completes a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
 
-Turn proxy settings on (!)
+```bash
+sudo systemctl restart tor
+```
+Turn proxy settings on.
 
 ## Fail2BAN
 

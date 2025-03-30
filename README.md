@@ -29,6 +29,7 @@ sudo apt upgrade
 ```bash
 sudo apt install dnscrypt-proxy
 ```
+usually unnecessary:
 ```bash
 sudo apt enable dnscrypt-proxy
 ```

@@ -15,8 +15,8 @@ sudo ufw default deny incoming
 ```bash
 sudo ufw enable
 ```
-Set software download server if on archive to https;
-Go through updates setup of install & get Ubuntu Pro.
+Check software download server addresses to all be https;
+go through updates setup & get Ubuntu Pro.
 
 ## DNSCRYPT
 

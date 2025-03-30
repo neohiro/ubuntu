@@ -1,6 +1,6 @@
 # Ubuntu
 
-Linux Ubuntu start commands after fresh install. Offers a more secure starting point for any new super user.
+Linux Ubuntu commands after fresh install. Offers a more secure starting point for any new super user.
 
 ## Firewall
 

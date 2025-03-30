@@ -70,7 +70,7 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
-That completes the setup of a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
+That completes a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
 
 Turn proxy settings on (!)
 

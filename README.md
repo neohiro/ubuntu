@@ -58,8 +58,7 @@ This way you setup DNS server on your Ubuntu on port 53 and Transparent proxy: 1
 sudo apt install fail2ban
 ```
 
-Optional security policy hardening 
-
+Optional security policy hardening (NOT for GUI, may break boot)
 (FOR GUI which already uses AppArmor):
 
 ```bash

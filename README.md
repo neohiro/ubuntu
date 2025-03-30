@@ -30,6 +30,9 @@ sudo apt upgrade
 sudo apt install dnscrypt-proxy
 ```
 ```bash
+sudo apt enable dnscrypt-proxy
+```
+```bash
 sudo systemctl restart dnscrypt-proxy
 ```
 ```bash
@@ -72,6 +75,12 @@ Turn your proxy settings on (!)
 
 ```bash
 sudo apt install fail2ban
+```
+```bash
+sudo systemctl enable fail2ban
+```
+```bash
+sudo systemctl restart fail2ban
 ```
 
 Check directory for other Linux Ubuntu terminal tutorials.

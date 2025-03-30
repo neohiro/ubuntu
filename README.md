@@ -40,7 +40,7 @@ sudo systemctl restart NetworkManager
 ```
 
 
-Set nameserver 127.0.2.1 (in NetworkManager or add to /etc/resolv.conf)
+Set nameserver 127.0.2.1 (in NetworkManager and/or add to /etc/resolv.conf)
 ```
 sudo nano /etc/resolv.conf
 ```

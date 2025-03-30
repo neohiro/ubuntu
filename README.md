@@ -1,6 +1,6 @@
 # Ubuntu
-Linux Ubuntu Start Commands
 
+Linux Ubuntu start commands after fresh install. Offers a more secure starting point for any new user.
 
 ## Firewall
 
@@ -15,7 +15,7 @@ sudo ufw default deny incoming
 ```bash
 sudo ufw enable
 ```
-
+Set software download server if on archive to https;
 Go through updates setup of install & get Ubuntu Pro.
 
 ## DNSCRYPT

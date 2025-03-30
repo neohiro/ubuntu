@@ -16,7 +16,7 @@ sudo ufw default deny incoming
 sudo ufw enable
 ```
 
-Go through updates setup of your device & Ubuntu Pro.
+Go through updates setup of install & get Ubuntu Pro.
 
 ## DNSCRYPT
 
@@ -56,8 +56,11 @@ sudo apt install tor
 ```bash
 sudo systemctl enable tor
 ```
+```bash
+sudo systemctl restart tor
+```
 
-Add to your tor/torrc to route ALL traffic through tor:
+Add to tor/torrc to route ALL traffic through tor:
 ```
 sudo nano /etc/tor/torrc
 ```
@@ -67,9 +70,9 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
-This way you setup DNS server on port 53 and Transparent proxy: 127.0.0.1:9040 (if dnscrypt-proxy fails)
+That completes the setup of a DNS server on port 53 (when dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
 
-Turn your proxy settings on (!)
+Turn proxy settings on (!)
 
 ## Fail2BAN
 

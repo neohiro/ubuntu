@@ -34,9 +34,11 @@ sudo systemctl restart dnscrypt-proxy
 sudo systemctl restart NetworkManager
 ```
 
-Set nameserver 127.0.2.1 (in NetworkManager or in /etc/resolv.conf)
-Add to /etc/resolv.conf:
 
+Set nameserver 127.0.2.1 (in NetworkManager or add to /etc/resolv.conf)
+```
+sudo nano /etc/resolv.conf
+```
 ```
 nameserver 127.0.2.1
 ```
@@ -51,7 +53,9 @@ sudo systemctl enable tor
 ```
 
 Add to your tor/torrc to route ALL traffic through tor:
-
+```
+sudo nano /etc/tor/torrc
+```
 ```
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1

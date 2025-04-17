@@ -2,7 +2,9 @@
 
 Linux Ubuntu commands after fresh install. Offers a more secure starting point for any new super user.
 
-
+```bash
+sudo passwd root
+```
 ```bash
 sudo apt update && sudo apt upgrade
 ```

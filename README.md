@@ -37,15 +37,15 @@ sudo apt install ubuntu-advantage-tools
 ```bash
 sudo pro attach <key>
 ```
+OR USE
+```bash
+sudo pro attach
+```
 ```bash
 sudo pro status
 ```
 ```bash
 sudo pro enable <service>
-```
-OR USE
-```bash
-sudo pro attach
 ```
 
 ## DNSCRYPT

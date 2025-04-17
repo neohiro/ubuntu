@@ -5,6 +5,9 @@ Linux Ubuntu commands after fresh install. Offers a more secure starting point f
 ```bash
 sudo apt update && sudo apt upgrade
 ```
+```bash
+sudo update-grub
+```
 
 ## Firewall
 

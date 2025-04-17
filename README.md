@@ -2,6 +2,13 @@
 
 Linux Ubuntu commands after fresh install. Offers a more secure starting point for any new super user.
 
+```bash
+sudo apt update
+```
+```bash
+sudo apt upgrade
+```
+
 ## Firewall
 
 (for servers)
@@ -20,12 +27,6 @@ go through updates setup & get Ubuntu Pro ([for servers](https://documentation.u
 
 ## DNSCRYPT
 
-```bash
-sudo apt update
-```
-```bash
-sudo apt upgrade
-```
 ```bash
 sudo apt install dnscrypt-proxy
 ```

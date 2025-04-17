@@ -10,7 +10,7 @@ sudo apt install python && sudo apt install pip
 sudo pip install shadowsocks
 ```
 ```bash
-nano /etc/config.json
+sudo nano /etc/config.json
 ```
 ```json
 {

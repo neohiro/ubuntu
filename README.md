@@ -116,6 +116,11 @@ sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
 ```
 
+
+```bash
+sudo apt-get update && sudo apt-get upgrade
+```
+
 Check directory for other Linux Ubuntu terminal tutorials
 ⭐ Stargaze to help others secure their Ubuntu install
  

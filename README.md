@@ -11,6 +11,9 @@ sudo apt upgrade
 
 ## Firewall
 
+```bash
+sudo apt install ufw
+```
 (for servers)
 ```bash
 sudo ufw allow ssh

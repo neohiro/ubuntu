@@ -89,10 +89,15 @@ sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
 ```
 
-  
+## PRO
+
+Go to [https://ubuntu.com/pro/dashboard], login with your account and use the cmd to attach.
+```bash
+sudo pro attach (key)
+```
+
 Check directory for other Linux Ubuntu terminal tutorials
 ⭐ Stargaze to help others secure their Ubuntu install
  
- 
- 
+  
 http://frenzypenguin.media

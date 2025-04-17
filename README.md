@@ -32,6 +32,9 @@ go through updates setup & install Ubuntu Pro.
 
 Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
+sudo apt install ubuntu-advantage-tools
+```
+```bash
 sudo pro attach <key>
 ```
 ```bash
@@ -41,9 +44,6 @@ sudo pro status
 sudo pro enable <service>
 ```
 OR USE
-```bash
-sudo apt install ubuntu-advantage-tools
-```
 ```bash
 sudo pro attach
 ```

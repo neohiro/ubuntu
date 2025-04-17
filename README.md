@@ -91,7 +91,7 @@ sudo systemctl restart fail2ban
 
 ## PRO
 
-Go to [https://ubuntu.com/pro/dashboard], login with your account and use the cmd to attach.
+Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
 sudo pro attach (key)
 ```

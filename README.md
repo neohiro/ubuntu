@@ -104,6 +104,14 @@ sudo pro status
 ```bash
 sudo pro enable <service>
 ```
+OR USE
+```bash
+sudo apt install ubuntu-advantage-tools
+```
+```bash
+sudo pro attach
+```
+
 
 Check directory for other Linux Ubuntu terminal tutorials
 ⭐ Stargaze to help others secure their Ubuntu install

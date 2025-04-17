@@ -12,7 +12,7 @@ sudo systemctl disable apparmor
 sudo nano /etc/default/grub
 ```
 
-GRUB_CMDLINE_LINUX="apparmor=0" (or with space after other params)
+GRUB_CMDLINE_LINUX="apparmor=0 security=selinux" (or with space after other params)
 
 ```bash
 sudo update-grub

@@ -10,9 +10,8 @@ sudo apt install python && sudo apt install pip
 sudo pip install shadowsocks
 ```
 ```bash
-sudo pip install shadowsocks
-```
 nano /etc/config.json
+```
 ```json
 {
 "server": "0.0.0.0",

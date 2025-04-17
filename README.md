@@ -10,7 +10,7 @@ sudo apt update && sudo apt upgrade
 sudo update-grub
 ```
 ```bash
-do-release-upgrade
+sudo do-release-upgrade
 ```
 
 ## Firewall

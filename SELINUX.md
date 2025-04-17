@@ -23,7 +23,10 @@ sudo apt install policycoreutils selinux-utils selinux-basics
 ```bash
 sudo selinux-config-enforcing
 ```
-or
+```bash
+sudo selinux-activate
+```
+or to undo
 ```bash
 sudo setenforce 0 
 ```
@@ -31,5 +34,3 @@ or
 ```bash
 enforcing=0
 ```
-```bash
-sudo selinux-activate

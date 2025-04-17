@@ -93,7 +93,13 @@ sudo systemctl restart fail2ban
 
 Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
-sudo pro attach (key)
+sudo pro attach <key>
+```
+```bash
+sudo pro status
+```
+```bash
+sudo pro enable <service>
 ```
 
 Check directory for other Linux Ubuntu terminal tutorials

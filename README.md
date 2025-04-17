@@ -26,7 +26,27 @@ sudo ufw default deny incoming
 sudo ufw enable
 ```
 Check software download server addresses to all be https;
-go through updates setup & get Ubuntu Pro ([for servers](https://documentation.ubuntu.com/server/tutorial/attach-your-ubuntu-pro-subscription/index.html)).
+go through updates setup & install Ubuntu Pro.
+
+## PRO
+
+Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
+```bash
+sudo pro attach <key>
+```
+```bash
+sudo pro status
+```
+```bash
+sudo pro enable <service>
+```
+OR USE
+```bash
+sudo apt install ubuntu-advantage-tools
+```
+```bash
+sudo pro attach
+```
 
 ## DNSCRYPT
 
@@ -91,27 +111,6 @@ sudo systemctl enable fail2ban
 ```bash
 sudo systemctl restart fail2ban
 ```
-
-## PRO
-
-Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
-```bash
-sudo pro attach <key>
-```
-```bash
-sudo pro status
-```
-```bash
-sudo pro enable <service>
-```
-OR USE
-```bash
-sudo apt install ubuntu-advantage-tools
-```
-```bash
-sudo pro attach
-```
-
 
 Check directory for other Linux Ubuntu terminal tutorials
 ⭐ Stargaze to help others secure their Ubuntu install

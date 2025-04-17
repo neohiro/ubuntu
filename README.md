@@ -9,6 +9,9 @@ sudo passwd root
 sudo apt update && sudo apt upgrade
 ```
 ```bash
+sudo apt-get update && sudo apt-get upgrade
+```
+```bash
 sudo update-grub
 ```
 ```bash
@@ -116,11 +119,6 @@ sudo systemctl enable fail2ban
 ```
 ```bash
 sudo systemctl restart fail2ban
-```
-
-##
-```bash
-sudo apt-get update && sudo apt-get upgrade
 ```
 
 Check directory for other Linux Ubuntu terminal tutorials

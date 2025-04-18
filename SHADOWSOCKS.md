@@ -34,6 +34,3 @@ Set up your Shadowsocks client and set up obfuscation:
 ```bash
 sudo apt install simple-obfs
 ```
-```bash
-sudo systemctl enable shadowsocks-libev
-```

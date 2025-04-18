@@ -38,7 +38,16 @@ Remove previous docker containers before continuing
 docker rm -f $(docker ps -aq)
 ```
 
-
+Run the container with the default configuration (see config.yaml.dist) and expose DNS ports
 ```bash
+docker run --name dnsproxy \
+  -p 53:53/tcp -p 53:53/udp \
+  adguard/dnsproxy
 ```
+Or with a config of your own
 ```bash
+docker run --name dnsproxy \
+  -p 53:53/tcp -p 53:53/udp \
+  -v config.yaml:/opt/dnsproxy/config.yaml \
+  adguard/dnsproxy
+```

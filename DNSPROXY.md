@@ -55,3 +55,11 @@ Accessibility from outside
 ```bash
 sudo ufw allow 53 && sudo ufw allow 443
 ```
+
+If something goes wrong, bypass DNS by using:
+```bash
+sudo rm /etc/resolv.conf
+```
+```bash
+echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+```

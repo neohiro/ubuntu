@@ -51,7 +51,7 @@ docker run --name dnsproxy \
   -v config.yaml:/opt/dnsproxy/config.yaml \
   adguard/dnsproxy
 ```
-Accessibility from outside:
+Accessibility from outside
 ```bash
 sudo ufw allow 53
 ```

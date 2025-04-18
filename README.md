@@ -66,13 +66,6 @@ usually unnecessary:
 ```bash
 sudo systemctl enable dnscrypt-proxy
 ```
-```bash
-sudo systemctl restart dnscrypt-proxy
-```
-```bash
-sudo systemctl restart NetworkManager
-```
-
 
 Set nameserver 127.0.2.1 (in Network Manager and/or add to /etc/resolv.conf)
 ```
@@ -81,6 +74,14 @@ sudo nano /etc/resolv.conf
 ```
 nameserver 127.0.2.1
 ```
+
+```bash
+sudo systemctl restart dnscrypt-proxy
+```
+```bash
+sudo systemctl restart NetworkManager
+```
+
 
 ## Tor
 

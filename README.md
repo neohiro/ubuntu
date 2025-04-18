@@ -100,10 +100,11 @@ sudo nano /etc/tor/torrc
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
-DNSPort 53
+DNSPort 13
 ```
 Redirect outbound traffic with iptables
 ```bash
+sudo iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
 ```

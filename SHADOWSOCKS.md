@@ -10,7 +10,7 @@ sudo apt install python && sudo apt install pip
 sudo pip install shadowsocks
 ```
 ```bash
-sudo nano /etc/config.json
+sudo nano /etc/client.json
 ```
 ```json
 {
@@ -24,7 +24,7 @@ sudo nano /etc/config.json
 }
 ```
 ```bash
-sudo sslocal -c /etc/config.json
+sudo sslocal -c /etc/client.json
 ```
 ```bash
 sudo ufw allow 1080

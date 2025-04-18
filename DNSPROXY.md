@@ -1,3 +1,44 @@
 Ideally, use a Docker image pull
 
+```bash
 docker pull adguard/dnsproxy
+```
+
+Before you can use the dnsproxy server, disable anything running on port 53
+```bash
+sudo nano /etc/systemd/resolved.conf
+```
+Change settings to:
+```bash
+[Resolve]
+DNS=1.1.1.3
+#FallbackDNS=
+#Domains=
+#LLMNR=no
+#MulticastDNS=no
+#DNSSEC=no
+#DNSOverTLS=no
+#Cache=no
+DNSStubListener=no
+#ReadEtcHosts=yes
+```
+
+Create symlink to new file
+```bash
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+```
+
+Change Tor DNS port as well
+```bash
+sudo nano /etc/tor/torrc
+```
+
+Remove previous docker containers before continuing
+```bash
+docker rm -f $(docker ps -aq)
+```
+
+
+```bash
+```
+```bash

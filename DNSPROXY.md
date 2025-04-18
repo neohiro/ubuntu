@@ -53,5 +53,5 @@ docker run --name dnsproxy \
 ```
 Accessibility from outside
 ```bash
-sudo ufw allow 53
+sudo ufw allow 53 && sudo ufw allow 443
 ```

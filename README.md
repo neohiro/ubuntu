@@ -105,12 +105,9 @@ DNSPort 5353
 ```
 Redirect outbound traffic with iptables
 ```bash
-sudo iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5353
-sudo iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5353
-sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040
+sudo iptables -t nat -A OUTPUT -p tcp -p udp --dport 53 -j REDIRECT --to-ports 5353
+sudo iptables -t nat -A OUTPUT -p tcp -p udp --dport 80 -j REDIRECT --to-ports 9040
+sudo iptables -t nat -A OUTPUT -p tcp -p udp --dport 443 -j REDIRECT --to-ports 9040
 ```
 That completes a DNS server on port 53 (for dnscrypt-proxy or dnsproxy) and Transparent proxy server: 127.0.0.1:9040
 

@@ -113,7 +113,6 @@ That completes a DNS server on port 53 (for dnscrypt-proxy or dnsproxy) and Tran
 ```bash
 sudo systemctl restart tor
 ```
-Turn proxy settings on.
 
 ## Fail2BAN
 

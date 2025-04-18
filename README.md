@@ -102,6 +102,11 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
+Redirect outbound traffic with iptables
+```bash
+sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
+sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
+```
 That completes a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
 
 ```bash

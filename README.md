@@ -38,11 +38,11 @@ Check software download server addresses to all be https;
 go through updates setup & install Ubuntu Pro.
 
 ## PRO
-
-Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
 sudo apt install ubuntu-advantage-tools -y
 ```
+
+Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
 sudo pro attach <key>
 ```
@@ -50,6 +50,7 @@ OR USE
 ```bash
 sudo pro attach
 ```
+
 ```bash
 sudo pro status
 ```

@@ -108,7 +108,7 @@ sudo iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5353
 sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
 ```
-That completes a DNS server on port 53 (if dnscrypt-proxy fails) and Transparent proxy server: 127.0.0.1:9040
+That completes a DNS server on port 53 (for dnscrypt-proxy or dnsproxy) and Transparent proxy server: 127.0.0.1:9040
 
 ```bash
 sudo systemctl restart tor

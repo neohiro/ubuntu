@@ -21,7 +21,7 @@ sudo do-release-upgrade
 ## Firewall
 
 ```bash
-sudo apt install ufw
+sudo apt install ufw -y
 ```
 (for servers)
 ```bash
@@ -41,7 +41,7 @@ go through updates setup & install Ubuntu Pro.
 
 Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
 ```bash
-sudo apt install ubuntu-advantage-tools
+sudo apt install ubuntu-advantage-tools -y
 ```
 ```bash
 sudo pro attach <key>
@@ -60,7 +60,7 @@ sudo pro enable <service>
 ## DNSCRYPT
 
 ```bash
-sudo apt install dnscrypt-proxy
+sudo apt install dnscrypt-proxy -y
 ```
 usually unnecessary:
 ```bash
@@ -85,7 +85,7 @@ nameserver 127.0.2.1
 ## Tor
 
 ```bash
-sudo apt install tor
+sudo apt install tor -y
 ```
 ```bash
 sudo systemctl enable tor
@@ -112,7 +112,7 @@ Turn proxy settings on.
 
 (only if you use remote ssh)
 ```bash
-sudo apt install fail2ban
+sudo apt install fail2ban -y
 ```
 ```bash
 sudo systemctl enable fail2ban

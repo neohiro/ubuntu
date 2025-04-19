@@ -6,10 +6,10 @@ Linux Ubuntu commands after fresh install. Offers a more secure starting point f
 sudo passwd root
 ```
 ```bash
-sudo apt update && sudo apt upgrade -y
+sudo apt update && sudo apt upgrade
 ```
 ```bash
-sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get update && sudo apt-get upgrade
 ```
 ```bash
 sudo update-grub

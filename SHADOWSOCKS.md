@@ -29,7 +29,7 @@ sudo nano /etc/shadowsocks/config.json
 ```bash
 sudo nano /etc/systemd/system/shadowsocks.service
 ```
-```json
+```bash
 [Unit]
 Description=Shadowsocks Proxy Server
 After=network.target

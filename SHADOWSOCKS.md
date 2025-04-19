@@ -27,7 +27,29 @@ sudo nano /etc/shadowsocks/config.json
 }
 ```
 ```bash
-sudo sslocal -c /etc/client.json
+sudo nano /etc/systemd/system/shadowsocks.service
+```
+```json
+[Unit]
+Description=Shadowsocks Proxy Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ssserver -c /etc/shadowsocks/config.json
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable shadowsocks
+```
+```bash
+sudo systemctl start shadowsocks
+```
+Check the status of shadowsocks:
+```bash
+sudo systemctl status shadowsocks
 ```
 ```bash
 sudo ufw allow 8888

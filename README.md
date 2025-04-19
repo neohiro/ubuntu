@@ -105,8 +105,8 @@ DNSPort 5335
 ```
 Redirect outbound traffic with iptables
 ```bash
-sudo iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 5335
-sudo iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 5335
+sudo iptables -t nat -A OUTPUT -p tcp --dport 5335 -j REDIRECT --to-ports 53
+sudo iptables -t nat -A OUTPUT -p udp --dport 5335 -j REDIRECT --to-ports 53
 sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040

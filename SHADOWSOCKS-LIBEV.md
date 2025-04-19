@@ -38,3 +38,5 @@ Set up Shadowsocks client and optionally set up obfuscation (remove 2x '#' in js
 ```bash
 sudo apt install simple-obfs
 ```
+
+Or a docker install via [https://github.com/teddysun/shadowsocks_install/blob/master/docker/shadowsocks-libev/README.md]

@@ -1,0 +1,40 @@
+# ShadowSocks
+
+```bash
+sudo apt update && sudo apt upgrade
+```
+```bash
+sudo apt install shadowsocks-libev
+```
+```bash
+sudo nano /etc/shadowsocks-libev/config.json
+```
+```json
+{
+"server": "0.0.0.0",
+"server_port": 8888,
+"password": "PASSWORD",
+"method": "aes-256-gcm",
+"timeout": 300
+#"plugin": "obfs-server",
+#"plugin_opts": "obfs=http"
+}
+```
+```bash
+sudo systemctl restart shadowsocks-libev.service
+```
+```bash
+systemctl status shadowsocks-libev.service
+```
+
+```bash
+sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT
+sudo iptables -I INPUT -p udp --dport 8888 -j ACCEPT
+```
+```bash
+sudo ufw allow 8888
+```
+Set up Shadowsocks client and optionally set up obfuscation (remove 2x '#' in json above):
+```bash
+sudo apt install simple-obfs
+```

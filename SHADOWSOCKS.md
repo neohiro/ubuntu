@@ -4,10 +4,10 @@
 sudo apt update && sudo apt upgrade
 ```
 ```bash
-sudo apt install python && sudo apt install pip
+sudo apt install python3 python3-pip -y
 ```
 ```bash
-sudo pip install shadowsocks
+sudo pip3 install shadowsocks
 ```
 ```bash
 sudo nano /etc/client.json

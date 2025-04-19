@@ -131,6 +131,10 @@ sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
 ```
 
+```bash
+reboot
+```
+
 Check directory for other Linux Ubuntu terminal tutorials
 ⭐ Stargaze to help others secure their Ubuntu install
  

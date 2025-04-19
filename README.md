@@ -130,7 +130,7 @@ sudo systemctl enable fail2ban
 ```bash
 sudo systemctl restart fail2ban
 ```
-
+##
 ```bash
 reboot
 ```

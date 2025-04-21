@@ -23,7 +23,6 @@ run() {
   "$@"
   if [ "$?" -ne "0" ]; then
     echo "  [ERROR] Command failed: $*"
-    exit 1
   fi
 }
 

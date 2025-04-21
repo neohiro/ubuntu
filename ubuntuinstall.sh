@@ -101,12 +101,6 @@ harden_ssh() {
     else
        msg "SSH Port is not 22, not changing it."
     fi
-
-    # Disable password authentication and use PubKey
-    run sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-    run sudo sed -i 's/^#PasswordAuthentication no/PasswordAuthentication no/' /etc/ssh/sshd_config
-    run sudo systemctl restart sshd
-    msg "Don't forget to copy your public key to the server."
 }
 
 # Function to setup firewall (UFW)
@@ -132,7 +126,7 @@ setup_tor() {
   # wants to *run a Tor relay*, they will need to edit /etc/tor/torrc.
   # That is beyond the scope of a simple setup script.
 
-  msg "Tor daemon installed.  If you want to *use* Tor for browsing, download Tor Browser."
+  msg "Tor daemon installed, please edit /etc/tor/torrc.  If you want to browse with Tor, download Tor Browser."
   msg "  https://www.torproject.org/download/"
 }
 
@@ -167,5 +161,5 @@ disable_ipv6 #  <--  WARNING:  This can break things.
 
 msg "Setup and hardening complete."
 msg "  [IMPORTANT]  Review all changes and reboot your system."
-msg "  [IMPORTANT]  Configure your DNS settings (netplan) as described above."
+msg "  [IMPORTANT]  Configure DNS settings (NetworkManager, netplan or resolv.conf) as described above."
 

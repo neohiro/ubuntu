@@ -26,7 +26,6 @@ run() {
   "$@"
   if [ "$?" -ne "0" ]; then
     echo "  [ERROR] Command failed: $*"
-    exit 1
   fi
 }
 
@@ -61,7 +60,7 @@ setup_dnscrypt() {
   #  I'm simplifying to a basic configuration.  The user should
   #  review /etc/dnscrypt-proxy/dnscrypt-proxy.toml and configure
   #  it to their needs.
-  run sudo sed -i 's/# listen_addresses = \[\]/listen_addresses = \['\''127.0.0.1:53'\''\]/' /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+  run sudo sed -i 's/# listen_addresses = \[\]/listen_addresses = \['\''127.0.2.1:53'\''\]/' /etc/dnscrypt-proxy/dnscrypt-proxy.toml
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
 
@@ -79,13 +78,13 @@ setup_dnscrypt() {
   #  See https://ubuntu.com/server/docs/network-configuration for
   #  details on how to configure netplan.
   #
-  msg "IMPORTANT:  You MUST configure your system to use 127.0.0.1 as the DNS server."
+  msg "IMPORTANT:  You MUST configure your system to use 127.0.2.1 as the DNS server."
   msg "  This is typically done by editing a netplan configuration file in /etc/netplan/."
   msg "  See https://ubuntu.com/server/docs/network-configuration for details."
 
 
   # Test DNSCrypt.  This is kept as a check.
-  run dig +short myip.opendns.com @127.0.0.1
+  run dig +short myip.opendns.com @127.0.2.1
 }
 
 

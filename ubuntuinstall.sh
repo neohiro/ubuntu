@@ -87,33 +87,12 @@ setup_dnscrypt() {
   run dig +short myip.opendns.com @127.0.2.1
 }
 
-# Function to harden SSH
-harden_ssh() {
-    msg "Hardening SSH..."
-    # Disable root login
-    run sudo sed -i 's/^#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
-    # Change default SSH port
-    # Read the current port, and if it is 22, change it.
-    CURRENT_PORT=$(grep "^Port " /etc/ssh/sshd_config | awk '{print $1}')
-    if [ "$CURRENT_PORT" = "Port" ]; then
-       run sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config
-       msg "SSH Port changed to 2222.  Change it to a random port."
-    else
-       msg "SSH Port is not 22, not changing it."
-    fi
-        # Additional hardening options
-    run sudo sed -i 's/^#LoginGraceTime 2m/LoginGraceTime 30s/' /etc/ssh/sshd_config
-    run sudo sed -i 's/^#MaxAuthTries 6/MaxAuthTries 3/' /etc/ssh/sshd_config
-    run sudo sed -i 's/^#MaxSessions 10/MaxSessions 2/' /etc/ssh/sshd_config
-    run sudo systemctl restart sshd
-}
-
 # Function to setup firewall (UFW)
 setup_firewall() {
   msg "Setting up firewall (UFW)..."
   run sudo ufw default deny incoming
   run sudo ufw default allow outgoing
-  run sudo ufw allow ssh
+  run sudo ufw deny ssh
   run sudo ufw enable
   run sudo ufw status
 }

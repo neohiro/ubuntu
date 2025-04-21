@@ -142,6 +142,16 @@ disable_ipv6() {
   msg "IPv6 disabled.  Reboot may be required for full effect."
 }
 
+# Function to set secure permissions
+set_secure_permissions() {
+  msg "Setting secure permissions..."
+  run sudo chmod 750 /root
+  run sudo chmod 700 /etc/passwd
+  run sudo chmod 644 /etc/shadow
+  run sudo chown root:root /etc/passwd
+  run sudo chown root:root /etc/shadow
+}
+
 # --- Main Script ---
 
 msg "Starting Ubuntu setup and hardening..."
@@ -157,6 +167,7 @@ setup_dnscrypt
 setup_firewall
 setup_tor
 harden_ssh
+set_secure_permissions
 disable_ipv6 #  <--  WARNING:  This can break things.
 
 msg "Setup and hardening complete."

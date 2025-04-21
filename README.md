@@ -1,6 +1,6 @@
 # Ubuntu
 
-Linux Ubuntu commands after fresh install. Offers a more secure starting point for any new super user.
+Linux Ubuntu commands after fresh install, automated in attached shell files. The server version does not harden SSH as much. Offers a more secure starting point for any new super user.
 
 ```bash
 sudo passwd root

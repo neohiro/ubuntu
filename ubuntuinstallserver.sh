@@ -112,11 +112,15 @@ harden_ssh() {
     else
        msg "SSH Port is not 22, not changing it."
     fi
+    # Disable password authentication and use PubKey
+    run sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    run sudo sed -i 's/^#PasswordAuthentication no/PasswordAuthentication no/' /etc/ssh/sshd_config
     # Additional hardening options
     run sudo sed -i 's/^#LoginGraceTime 2m/LoginGraceTime 30s/' /etc/ssh/sshd_config
     run sudo sed -i 's/^#MaxAuthTries 6/MaxAuthTries 3/' /etc/ssh/sshd_config
     run sudo sed -i 's/^#MaxSessions 10/MaxSessions 2/' /etc/ssh/sshd_config
     run sudo systemctl restart sshd
+    msg "Don't forget to copy your public key to the server."
 }
 
 # Function to install and configure Tor

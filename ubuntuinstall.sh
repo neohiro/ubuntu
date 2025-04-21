@@ -160,7 +160,6 @@ update_system
 setup_dnscrypt
 setup_firewall
 setup_tor
-harden_ssh
 set_secure_permissions
 configure_unattended_upgrades
 disable_ipv6 #  <--  WARNING:  This can break things.

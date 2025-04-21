@@ -98,6 +98,22 @@ setup_firewall() {
   run sudo ufw status
 }
 
+# Function to harden SSH
+harden_ssh() {
+    msg "Hardening SSH..."
+    # Disable root login
+    run sudo sed -i 's/^#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+    # Change default SSH port
+    # Read the current port, and if it is 22, change it.
+    CURRENT_PORT=$(grep "^Port " /etc/ssh/sshd_config | awk '{print $1}')
+    if [ "$CURRENT_PORT" = "Port" ]; then
+       run sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config
+       msg "SSH Port changed to 2222.  Change it to a random port."
+    else
+       msg "SSH Port is not 22, not changing it."
+    fi
+}
+
 # Function to install and configure Tor
 setup_tor() {
   msg "Setting up Tor..."

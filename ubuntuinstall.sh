@@ -92,7 +92,6 @@ setup_firewall() {
   msg "Setting up firewall (UFW)..."
   run sudo ufw default deny incoming
   run sudo ufw default allow outgoing
-  run sudo ufw deny ssh
   run sudo ufw enable
   run sudo ufw status
 }
@@ -126,16 +125,6 @@ disable_ipv6() {
   msg "IPv6 disabled.  Reboot may be required for full effect."
 }
 
-# Function to set secure permissions
-set_secure_permissions() {
-  msg "Setting secure permissions..."
-  run sudo chmod 750 /root
-  run sudo chmod 700 /etc/passwd
-  run sudo chmod 644 /etc/shadow
-  run sudo chown root:root /etc/passwd
-  run sudo chown root:root /etc/shadow
-}
-
 # Function to install and configure unattended upgrades
 configure_unattended_upgrades() {
     msg "Configuring unattended upgrades..."
@@ -160,7 +149,6 @@ update_system
 setup_dnscrypt
 setup_firewall
 setup_tor
-set_secure_permissions
 configure_unattended_upgrades
 disable_ipv6 #  <--  WARNING:  This can break things.
 

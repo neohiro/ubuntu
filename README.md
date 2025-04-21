@@ -1,6 +1,6 @@
 # Ubuntu
 
-Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell). The server version includes fail2ban. Offers a more secure starting point for any new super user.
+Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell). Offers a more secure starting point for any new super user.
 
 ```bash
 sudo passwd root

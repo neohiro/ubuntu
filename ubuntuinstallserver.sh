@@ -170,6 +170,17 @@ set_secure_permissions() {
   run sudo chown root:root /etc/shadow
 }
 
+# Function to install and configure unattended upgrades
+configure_unattended_upgrades() {
+    msg "Configuring unattended upgrades..."
+    run sudo apt-get install -y unattended-upgrades
+    run sudo dpkg-reconfigure --priority=low unattended-upgrades
+    # Enable automatic updates
+    run sudo sed -i 's/^\/\/Unattended-Upgrade::Allowed-Origins/Unattended-Upgrade::Allowed-Origins/' /etc/apt/apt.conf.d/50unattended-upgrades
+    run sudo sed -i 's/^Unattended-Upgrade::Automatic-Update \"0\";/Unattended-Upgrade::Automatic-Update \"1\";/' /etc/apt/apt.conf.d/20auto-upgrades
+    msg "Unattended upgrades configured to automatically install security updates."
+}
+
 # --- Main Script ---
 
 msg "Starting Ubuntu setup and hardening..."
@@ -188,6 +199,7 @@ harden_ssh
 disable_ipv6 #  <--  WARNING:  This can break things.
 setup_fail2ban
 set_secure_permissions
+configure_unattended_upgrades
 
 msg "Setup and hardening complete."
 msg "  [IMPORTANT]  Review all changes and reboot your system."

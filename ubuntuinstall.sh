@@ -101,6 +101,11 @@ harden_ssh() {
     else
        msg "SSH Port is not 22, not changing it."
     fi
+        # Additional hardening options
+    run sudo sed -i 's/^#LoginGraceTime 2m/LoginGraceTime 30s/' /etc/ssh/sshd_config
+    run sudo sed -i 's/^#MaxAuthTries 6/MaxAuthTries 3/' /etc/ssh/sshd_config
+    run sudo sed -i 's/^#MaxSessions 10/MaxSessions 2/' /etc/ssh/sshd_config
+    run sudo systemctl restart sshd
 }
 
 # Function to setup firewall (UFW)

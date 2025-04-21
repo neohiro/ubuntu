@@ -179,7 +179,7 @@ update_system
 setup_dnscrypt
 setup_firewall
 setup_tor
-#harden_ssh
+harden_ssh
 disable_ipv6 #  <--  WARNING:  This can break things.
 setup_fail2ban
 set_secure_permissions

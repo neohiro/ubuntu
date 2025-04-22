@@ -9,12 +9,13 @@ sudo apt install shadowsocks-libev
 ```bash
 sudo nano /etc/shadowsocks-libev/config.json
 ```
-for servers (or fill in client data):
+for servers (or fill in same for client data with "local_address":127.0.0.1" uncommented):
 ```json
 {
     "server":["::0", "0.0.0.0"],
     "mode":"tcp_and_udp",
     "server_port":8888,
+    #"local_address":127.0.0.1",
     "local_port":1080,
     "password":"PWRD<<<<<<<<<<<<<",
     "timeout":300,

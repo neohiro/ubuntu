@@ -9,6 +9,7 @@ sudo apt install shadowsocks-libev
 ```bash
 sudo nano /etc/shadowsocks-libev/config.json
 ```
+for servers (or fill in client data):
 ```json
 {
     "server":["::0", "0.0.0.0"],
@@ -28,7 +29,7 @@ sudo systemctl restart shadowsocks-libev.service
 ```bash
 systemctl status shadowsocks-libev.service
 ```
-
+for servers:
 ```bash
 sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT
 sudo iptables -I INPUT -p udp --dport 8888 -j ACCEPT

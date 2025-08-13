@@ -4,7 +4,7 @@
 sudo apt update && sudo apt upgrade
 ```
 ```bash
-sudo apt install shadowsocks-libev
+sudo apt install shadowsocks-libev -y
 ```
 ```bash
 sudo nano /etc/shadowsocks-libev/config.json

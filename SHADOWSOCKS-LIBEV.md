@@ -34,7 +34,9 @@ for servers:
 ```bash
 sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT
 sudo iptables -I INPUT -p udp --dport 8888 -j ACCEPT
+sudo apt install iptables-persistent
 ```
+https://linuxconfig.org/how-to-make-iptables-rules-persistent-after-reboot-on-linux
 ```bash
 sudo ufw allow 8888
 ```

@@ -103,15 +103,15 @@ AutomapHostsOnResolve 1
 TransPort 9040
 DNSPort 53
 ```
-```
-sudo apt-get install iptables-persistent
-```
 Restrict outbound traffic with iptables to **only** Tor (warning, some updates will not work):
 ```bash
 sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
 sudo iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040
+```
+```
+sudo apt-get install iptables-persistent
 ```
 ```
 sudo netfilter-persistent save

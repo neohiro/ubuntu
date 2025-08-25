@@ -32,12 +32,12 @@ systemctl status shadowsocks-libev.service
 ```
 for servers:
 ```bash
-sudo apt-get install iptables-persistent
-```
-```bash
 sudo iptables -I INPUT -p tcp --dport 8888 -j ACCEPT
 sudo iptables -I INPUT -p udp --dport 8888 -j ACCEPT
 sudo apt install iptables-persistent
+```
+```bash
+sudo apt-get install iptables-persistent
 ```
 ```bash
 sudo netfilter-persistent save

@@ -6,16 +6,16 @@ Linux Ubuntu commands after fresh install, automated in attached shell files (wi
 sudo passwd root
 ```
 ```bash
-sudo apt update && sudo apt upgrade
+sudo apt update && sudo apt upgrade -y
 ```
 ```bash
-sudo apt-get update && sudo apt-get upgrade
+sudo apt-get update && sudo apt-get upgrade -y
 ```
 ```bash
-sudo update-grub
+sudo update-grub -y
 ```
 ```bash
-sudo do-release-upgrade
+sudo do-release-upgrade -y
 ```
 
 ## Firewall

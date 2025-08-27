@@ -32,7 +32,7 @@ and/or (for clients)
 sudo ufw default deny incoming
 ```
 ```bash
-sudo ufw enable
+sudo ufw enable -y
 ```
 Check software download server addresses to all be https;
 go through updates setup & install Ubuntu Pro.

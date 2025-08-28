@@ -121,7 +121,12 @@ That completes a DNS server on port 53 (for dnscrypt-proxy or dnsproxy) and Tran
 ```bash
 sudo systemctl restart tor
 ```
+## System Logging
 
+Remove old system logs after 7 days
+```bash
+sudo journalctl --vacuum-time=7d
+```
 ## Fail2BAN
 
 (only if you use remote ssh)

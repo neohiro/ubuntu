@@ -125,8 +125,18 @@ sudo systemctl restart tor
 
 Remove old system logs after 7 days
 ```bash
-sudo journalctl --vacuum-time=7d
+sudo nano /etc/systemd/journald.conf
 ```
+Enter following text:
+```bash
+# Set the maximum size of the journal logs in bytes
+SystemMaxUse=200M
+ 
+# Set the number of days after which logs will be deleted
+MaxRetentionSec=7d
+```
+Save the file.
+
 ## Fail2BAN
 
 (only if you use remote ssh)

@@ -1,4 +1,6 @@
 # Ubuntu
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
+[![Build Status](https://github.com/neohiro/ubuntu/actions/workflows/release.yml/badge.svg)](https://github.com/neohiro/ubuntu/actions)
 
 Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell). Offers a more secure starting point for any new super user.
 

@@ -14,10 +14,10 @@ sudo apt update && sudo apt upgrade -y
 sudo apt-get update && sudo apt-get upgrade -y
 ```
 ```bash
-sudo update-grub -y
+sudo update-grub
 ```
 ```bash
-sudo do-release-upgrade -y
+sudo do-release-upgrade
 ```
 
 ## Firewall
@@ -34,7 +34,7 @@ and/or (for clients)
 sudo ufw default deny incoming
 ```
 ```bash
-sudo ufw enable -y
+sudo ufw enable
 ```
 Check software download server addresses to all be https;
 go through updates setup & install Ubuntu Pro.
@@ -157,7 +157,7 @@ reboot
 ```
 
 Check directory for other Linux Ubuntu terminal tutorials
+
 ⭐ Stargaze to help others secure their Ubuntu install
- 
-  
-http://frenzypenguin.media
+
+🔗 [frenzypenguin.media](https://linktr.ee/frenzypenguin.media)

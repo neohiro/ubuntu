@@ -4,9 +4,6 @@
 #
 # Intended to be run on a fresh Ubuntu installation.  Use with caution.
 #
-# Author: Bard
-# Date: 2024-02-08
-#
 # Disclaimer: This script may modify system settings.  Review it carefully
 #             before running and understand the commands.  Backup your system
 #             if possible.  Run at your own risk.
@@ -46,9 +43,9 @@ update_system() {
 # Function to setup DNSCrypt
 setup_dnscrypt() {
   msg "Setting up DNSCrypt..."
-  # Add the DNSCrypt PPA.  This PPA is outdated.  The official way
-  # is now via their own debian repo.
-  #run sudo add-apt-repository ppa:shevchuk/dnscrypt- стабильный ppa: তালিকман/dnscrypt
+  # The old DNSCrypt PPA is outdated. The official way
+  # is now via their own debian repository.
+  # See https://github.com/DNSCrypt/dnscrypt-proxy/wiki/Installation-Linux
   #run sudo apt-get update
 
   # Install dnscrypt-proxy.
@@ -168,10 +165,10 @@ setup_fail2ban() {
 set_secure_permissions() {
   msg "Setting secure permissions..."
   run sudo chmod 750 /root
-  run sudo chmod 700 /etc/passwd
-  run sudo chmod 644 /etc/shadow
+  run sudo chmod 644 /etc/passwd
+  run sudo chmod 640 /etc/shadow
   run sudo chown root:root /etc/passwd
-  run sudo chown root:root /etc/shadow
+  run sudo chown root:shadow /etc/shadow
 }
 
 # Function to install and configure unattended upgrades

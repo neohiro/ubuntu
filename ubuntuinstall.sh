@@ -11,6 +11,26 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 ORIG_CWD="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+RECOVERY_CMD="tmux attach -t ubuntu-setup"
+
+print_recovery_cmd() {
+  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+  printf "\033[1;33m│  RECOVERY COMMAND — copy this BEFORE anything that might disconnect:  \033[0m\n"
+  printf "\033[1;33m│\033[0m                                                                      \033[1;36m%s\033[0m\n" "$RECOVERY_CMD"
+  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+  printf "  After reconnecting over SSH, run the command above to resume the run.\n\n"
+}
+
+_warn_if_not_tmux() {
+  [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ] && return 0
+  print_recovery_cmd
+}
+
+print_recovery_if_ssh() {
+  [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 0
+  print_recovery_cmd
+}
+
 ensure_tmux_if_ssh() {
   [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 0
   [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] || return 0
@@ -19,10 +39,8 @@ ensure_tmux_if_ssh() {
       apt-get install -y tmux >/dev/null 2>&1 || sudo apt-get install -y tmux >/dev/null 2>&1 || true
     fi
   fi
-  command -v tmux >/dev/null 2>&1 || { warn "tmux unavailable; SSH disconnect may kill the run."; return 0; }
-  local RECONNECT="tmux attach -t ubuntu-setup  # or:  ssh user@host 'tmux attach -t ubuntu-setup'"
-  bold "SSH session detected. Re-running inside tmux so a disconnect will not abort the script."
-  printf "  \033[1;36mCOPY BEFORE ANY DISCONNECT:\033[0m %s\n" "$RECONNECT"
+  command -v tmux >/dev/null 2>&1 || { warn "tmux unavailable; SSH disconnect may kill the run. ${RECOVERY_CMD} will NOT exist - run the script from a local terminal instead."; return 0; }
+  bold "SSH session detected. Wrapping this run in a tmux session so disconnects do not abort it."
   exec tmux new-session -A -s ubuntu-setup -n setup \
     "REPO_RAW_BASE='$REPO_RAW_BASE' \
      bash -c 'trap \"tmux kill-session -t ubuntu-setup 2>/dev/null\" EXIT; \
@@ -131,6 +149,7 @@ ask_category_enabled() {
 
 update_system() {
   msg "Updating system and installing base packages..."
+  _warn_if_not_tmux
   run sudo DEBIAN_FRONTEND=noninteractive apt-get update
   run sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -310,9 +329,10 @@ harden_ssh() {
   fi
 
   if prompt_yn "Change SSH port from 22 to 2222? (can lock you out if firewall not updated)" "n"; then
-    printf "\n\033[1;31m[!] If you lose the connection, reconnect with:\033[0m\n"
-    printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
-    read -r -p "Press Enter to continue (or Ctrl-C to abort) ..."
+    _warn_if_not_tmux
+    printf "\033[1;31m[!] SSH port change — losing connection?\033[0m  Reconnect with:\n"
+    printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
+    read -r -p "Press Enter to continue, or Ctrl-C to abort... " _
     run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
     run sudo ufw allow 2222/tcp
   fi
@@ -472,6 +492,8 @@ main() {
     err "This script must be run as root (use sudo)."; exit 1
   fi
   ensure_tmux_if_ssh
+  print_recovery_if_ssh
+  _warn_if_not_tmux
 
   detect_or_ask_env
   ask_profile

@@ -138,47 +138,57 @@ update_system() {
       wget curl gnupg lsb-release ca-certificates
 }
 
-_apply_dns_127_0_0_1() {
-  local DNS_PRIMARY="127.0.0.1"
-  local DNS_FALLBACK="1.1.1.1"
-  local NP
-  NP=$(command -v netplan 2>/dev/null || echo /usr/sbin/netplan)
+RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
 
-  if [ -x "$NP" ] && ls /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null | grep -q .; then
-    info "Renderer: netplan -> writing /etc/netplan/99-dnscrypt.yaml"
-    local f
-    f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
-    [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
-    run sudo cp "$f" "${f}.bak.$(date +%s)"
-    run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
+_warn_if_not_tmux() {
+  [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ] && return 0
+  printf "\033[1;31m[!] SSH DISCONNECT RISK\033[0m  Copy this command before you continue:\n"
+  printf "  \033[1;36m%s\033[0m\n" "$RECOVERY_CMD"
+  printf "  Run it to re-attach after reconnecting over SSH.\n\n"
+}
+
+apply_dns_via_nmcli() {
+  local DNS_PRIMARY="${1:-127.0.0.1}" DNS_FALLBACK="${2:-1.1.1.1}"
+  _warn_if_not_tmux
+  info "Setting DNS on active NetworkManager connections..."
+  local conn
+  while IFS= read -r conn; do
+    [ -z "$conn" ] && continue
+    run sudo nmcli con mod "$conn" ipv4.dns "$DNS_PRIMARY $DNS_FALLBACK"
+    run sudo nmcli con mod "$conn" ipv4.ignore-auto-dns yes
+    run sudo nmcli con up "$conn"
+  done < <(sudo nmcli -t -f NAME c show --active)
+}
+
+apply_dns_via_netplan() {
+  local DNS_PRIMARY="${1:-127.0.0.1}" DNS_FALLBACK="${2:-1.1.1.1}"
+  _warn_if_not_tmux
+  info "Applying DNS via netplan..."
+  local NP f
+  NP=$(command -v netplan 2>/dev/null || echo /usr/sbin/netplan)
+  [ -x "$NP" ] || { err "netplan not found."; return 0; }
+  f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
+  [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
+  [ -z "$f" ] && { err "No netplan YAML in /etc/netplan/."; return 0; }
+  run sudo cp "$f" "${f}.bak.$(date +%s)"
+  run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
 network:
   version: 2
   nameservers:
     addresses: [$DNS_PRIMARY, $DNS_FALLBACK]
 EOF
-    if ! "$NP" apply 2>&1; then
-      err "netplan apply failed - check /etc/netplan/99-dnscrypt.yaml."
-      return 0
-    fi
+  if ! "$NP" apply 2>&1; then
+    err "netplan apply failed - check /etc/netplan/99-dnscrypt.yaml."
     return 0
   fi
+}
 
-  if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
-    info "Renderer: NetworkManager -> setting ipv4.dns on active connections"
-    local conn
-    while IFS= read -r conn; do
-      [ -z "$conn" ] && continue
-      run sudo nmcli con mod "$conn" ipv4.dns "$DNS_PRIMARY $DNS_FALLBACK"
-      run sudo nmcli con mod "$conn" ipv4.ignore-auto-dns yes
-      run sudo nmcli con up "$conn"
-    done < <(sudo nmcli -t -f NAME c show --active)
-    return 0
-  fi
-
-  if command -v networkctl >/dev/null 2>&1; then
-    info "Renderer: systemd-networkd -> writing 99-dnscrypt.network"
-    run sudo mkdir -p /etc/systemd/network
-    run sudo tee /etc/systemd/network/99-dnscrypt.network >/dev/null <<EOF
+apply_dns_via_systemd_networkd() {
+  local DNS_PRIMARY="${1:-127.0.0.1}" DNS_FALLBACK="${2:-1.1.1.1}"
+  _warn_if_not_tmux
+  info "Applying DNS via systemd-networkd..."
+  run sudo mkdir -p /etc/systemd/network
+  run sudo tee /etc/systemd/network/99-dnscrypt.network >/dev/null <<EOF
 [Match]
 Name=*
 
@@ -186,13 +196,27 @@ Name=*
 DNS=$DNS_PRIMARY
 DNS=$DNS_FALLBACK
 EOF
-    run sudo systemctl restart systemd-networkd
-    return 0
+  run sudo systemctl restart systemd-networkd
+}
+
+_apply_dns_127_0_0_1() {
+  local DNS_PRIMARY="127.0.0.1" DNS_FALLBACK="1.1.1.1"
+
+  if [ -x /usr/sbin/netplan ] && ls /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null | grep -q .; then
+    apply_dns_via_netplan "$DNS_PRIMARY" "$DNS_FALLBACK"; return 0
   fi
 
-  err "No supported DNS renderer found (no netplan, no NetworkManager, no systemd-networkd)."
-  info "To set DNS manually, append 'nameserver $DNS_PRIMARY' to /etc/resolv.conf"
-  info "or run: sudo systemctl restart systemd-resolved"
+  if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    apply_dns_via_nmcli "$DNS_PRIMARY" "$DNS_FALLBACK"; return 0
+  fi
+
+  if command -v networkctl >/dev/null 2>&1; then
+    apply_dns_via_systemd_networkd "$DNS_PRIMARY" "$DNS_FALLBACK"; return 0
+  fi
+
+  err "No supported DNS renderer found."
+  info "Manual fallback: echo 'nameserver $DNS_PRIMARY' | sudo tee /etc/resolv.conf"
+  info "or: sudo systemd-resolve --interface=lo --set-dns=$DNS_PRIMARY"
 }
 
 setup_dnscrypt() {
@@ -208,15 +232,19 @@ setup_dnscrypt() {
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
   case "$REPLY_CHOICE" in
-    0) # auto-detect renderer and apply
-      _apply_dns_127_0_0_1
-      ;;
+    0) _apply_dns_127_0_0_1 ;;
   esac
   ok "dnscrypt-proxy installed. Test: dig +short myip.opendns.com @127.0.2.1"
 }
 
 setup_firewall() {
   msg "Firewall (UFW)"
+  if sudo ufw status | grep -q '^Status: active'; then
+    ok "UFW is already active - skipping enable."
+    sudo ufw status verbose
+    return 0
+  fi
+  _warn_if_not_tmux
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
   run sudo ufw default deny incoming
   run sudo ufw default allow outgoing
@@ -282,6 +310,9 @@ harden_ssh() {
   fi
 
   if prompt_yn "Change SSH port from 22 to 2222? (can lock you out if firewall not updated)" "n"; then
+    printf "\n\033[1;31m[!] If you lose the connection, reconnect with:\033[0m\n"
+    printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
+    read -r -p "Press Enter to continue (or Ctrl-C to abort) ..."
     run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
     run sudo ufw allow 2222/tcp
   fi
@@ -307,8 +338,9 @@ harden_ssh() {
     run sudo cp -f "$BACKUP" "$SSHCFG"
     return 1
   fi
+  _warn_if_not_tmux
   run sudo systemctl restart ssh
-  ok "SSH hardened and restarted."
+  ok "SSH hardened and restarted. Verify in a SECOND session before closing this one."
 }
 
 setup_fail2ban() {
@@ -336,6 +368,10 @@ JAIL
 configure_unattended_upgrades() {
   msg "Unattended security upgrades"
   if ! prompt_yn "Enable automatic security updates?" "y"; then return 0; fi
+  if grep -qE '^Unattended-Upgrade::Allowed-Origins' /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null; then
+    ok "Unattended upgrades already configured."
+    return 0
+  fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
   run sudo sed -i 's|//\s*Unattended-Upgrade::Allowed-Origins|Unattended-Upgrade::Allowed-Origins|' /etc/apt/apt.conf.d/50unattended-upgrades || true
   run sudo sed -i 's|Unattended-Upgrade::Automatic-Reboot "false"|Unattended-Upgrade::Automatic-Reboot "true"|' /etc/apt/apt.conf.d/50unattended-upgrades || true
@@ -397,6 +433,10 @@ harden_passwords() {
 deny = 5
 unlock_time = 900
 EOF
+  if grep -qE '^TMOUT=900; readonly TMOUT; export TMOUT' /etc/profile.d/99-tmout.sh 2>/dev/null; then
+    ok "Password/lockout policy already applied."
+    return 0
+  fi
   run sudo tee /etc/profile.d/99-tmout.sh >/dev/null <<'EOF'
 TMOUT=900; readonly TMOUT; export TMOUT
 EOF

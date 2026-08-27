@@ -125,22 +125,7 @@ sudo systemctl restart tor
 ```
 ## System Logging
 
-Remove old system logs after 7 days
-```bash
-sudo nano /etc/systemd/journald.conf
-```
-
-Enter following text:
-```bash
-# Set the maximum size of the journal logs in bytes
-SystemMaxUse=200M
- 
-# Set the number of days after which logs will be deleted
-MaxRetentionSec=7d
-```
-Save the file.
-
-If your drive is already getting full, run this script: [DeepClean]([https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh])
+To limit system file growth on Linux & if your drive is already getting full, run this script: [DeepClean](https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh)
 
 ## Fail2BAN
 

@@ -275,6 +275,12 @@ metrics_add() {
 
 # --- dynamic progress checklist (printed before each step) ---
 # Order matches the call order in main(). Status: pending | running | done | skip
+# UTF-8 detection: use box-drawing chars on UTF-8 terminals, ASCII fallback otherwise.
+_BAR_Filled='█'; _BAR_Empty='░'
+case "${LC_ALL:-${LANG:-}}" in
+  *UTF-8*|*utf8*|*UTF8*) ;;
+  *) _BAR_Filled='#'; _BAR_Empty='-' ;;
+esac
 declare -A CHECKLIST=(
   [tmux_wrap]=pending
   [env_detect]=pending
@@ -321,6 +327,7 @@ show_progress() {
     total=$((total + 1))
     case "${CHECKLIST[$key]:-pending}" in
       done)   done=$((done + 1)) ;;
+      running) done=$((done + 1)) ;;
       skip)   done=$((done + 1)) ;;
     esac
   done
@@ -329,8 +336,8 @@ show_progress() {
   local filled=$(( pct * width / 100 ))
   local empty=$(( width - filled ))
   local bar_filled bar_empty
-  bar_filled="$(printf '%*s' "$filled" '' | tr ' ' '█')"
-  bar_empty="$(printf '%*s' "$empty" '' | tr ' ' '░')"
+  bar_filled="$(printf '%*s' "$filled" '' | tr ' ' "$_BAR_Filled")"
+  bar_empty="$(printf '%*s' "$empty" '' | tr ' ' "$_BAR_Empty")"
   printf '\n\033[1;36m━━━ PROGRESS \033[1;32m%s\033[1;36m%s\033[0m \033[1;37m%d/%d (%d%%)\033[0m ━━━\n' \
     "$bar_filled" "$bar_empty" "$done" "$total" "$pct"
   for key in tmux_wrap env_detect system_update dnscrypt firewall tor ssh_hardening fail2ban unattended ipv6 sysctl apparmor pam optimize_asr deepclean other_scripts summary; do
@@ -355,8 +362,8 @@ _metrics_bar() {
   local filled=$(( value * width / max ))
   local empty=$(( width - filled ))
   local bar empty_str
-  bar="$(printf '%*s' "$filled" '' | tr ' ' '█')"
-  empty_str="$(printf '%*s' "$empty" '' | tr ' ' '░')"
+  bar="$(printf '%*s' "$filled" '' | tr ' ' "$_BAR_Filled")"
+  empty_str="$(printf '%*s' "$empty" '' | tr ' ' "$_BAR_Empty")"
   printf '  %-28s \033[1;32m%s\033[0m\033[1;30m%s\033[0m  %d\n' "$label" "$bar" "$empty_str" "$value"
 }
 

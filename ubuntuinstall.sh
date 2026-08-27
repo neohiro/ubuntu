@@ -166,15 +166,15 @@ _metrics_bar() {
   [ "$value" -gt "$max" ] 2>/dev/null && value="$max"
   local filled=$(( value * width / max ))
   local empty=$(( width - filled ))
-  local bar
+  local bar empty_str
   bar="$(printf '%*s' "$filled" '' | tr ' ' '█')"
-  local bar="${bar}"
-  local empty_str="$(printf '%*s' "$empty" '' | tr ' ' '░')"
+  empty_str="$(printf '%*s' "$empty" '' | tr ' ' '░')"
   printf '  %-28s \033[1;32m%s\033[0m\033[1;30m%s\033[0m  %d\n' "$label" "$bar" "$empty_str" "$value"
 }
 
 print_metrics_summary() {
-  local end_disk_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
+  local end_disk_kb
+  end_disk_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
   local disk_delta=$(( end_disk_kb - METRICS_START_DISK_KB ))
   local disk_freed_str
   if [ "$disk_delta" -gt 0 ]; then
@@ -305,7 +305,8 @@ apply_dns_via_netplan() {
   f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
   [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
   [ -z "$f" ] && { err "No netplan YAML in /etc/netplan/."; return 0; }
-  local bak="${f}.bak.$(date +%s)"
+  local bak
+  bak="${f}.bak.$(date +%s)"
   run sudo cp "$f" "$bak"
   record_backup "$f" "$bak"
   run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
@@ -339,8 +340,9 @@ apply_dns_via_systemd_networkd() {
   info "Applying DNS via systemd-networkd..."
   run sudo mkdir -p /etc/systemd/network
   local f="/etc/systemd/network/99-dnscrypt.network"
+  local bak
   if [ -f "$f" ]; then
-    local bak="${f}.bak.$(date +%s)"
+    bak="${f}.bak.$(date +%s)"
     run sudo cp "$f" "$bak"
     record_backup "$f" "$bak"
   fi
@@ -358,8 +360,13 @@ EOF
 _apply_dns_127_0_0_1() {
   local DNS_PRIMARY="127.0.0.1" DNS_FALLBACK="1.1.1.1"
 
-  if [ -x /usr/sbin/netplan ] && ls /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null | grep -q .; then
-    apply_dns_via_netplan "$DNS_PRIMARY" "$DNS_FALLBACK"; return 0
+  if [ -x /usr/sbin/netplan ]; then
+    local np_yaml
+    for np_yaml in /etc/netplan/*.yaml /etc/netplan/*.yml; do
+      if [ -f "$np_yaml" ]; then
+        apply_dns_via_netplan "$DNS_PRIMARY" "$DNS_FALLBACK"; return 0
+      fi
+    done
   fi
 
   if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
@@ -385,6 +392,14 @@ setup_dnscrypt() {
     return 0
   fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dnscrypt-proxy
+  if [ ! -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
+    err "dnscrypt-proxy.toml not found after install - cannot configure."
+    return 0
+  fi
+  if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ] && [ -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
+    run sudo cp /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
+    record_backup /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
+  fi
   if ! grep -qE "listen_addresses = \['127.0.0.2:53'\]" /etc/dnscrypt-proxy/dnscrypt-proxy.toml 2>/dev/null; then
     run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
   fi
@@ -664,7 +679,8 @@ NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || 
 CONTACT="${TOR_CONTACT:-you@example.com}"
 
   local TORRC="/etc/tor/torrc"
-  local TORBAK="${TORRC}.bak.$(date +%s)"
+  local TORBAK
+  TORBAK="${TORRC}.bak.$(date +%s)"
   run sudo cp "$TORRC" "$TORBAK"
   record_backup "$TORRC" "$TORBAK"
   run sudo tee "$TORRC" >/dev/null <<EOF
@@ -734,6 +750,10 @@ disable_ipv6() {
   fi
   run sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
   run sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+  if [ -f /etc/sysctl.conf ] && [ ! -f /var/backups/sysctl.conf.bak ]; then
+    run sudo cp /etc/sysctl.conf /var/backups/sysctl.conf.bak
+    record_backup /etc/sysctl.conf /var/backups/sysctl.conf.bak
+  fi
   # Ensure sysctl.conf ends in a newline, then append. The '$a\' form forces
   # a leading newline before the new content so the first appended line
   # cannot be glued to the previous one.
@@ -882,7 +902,8 @@ harden_ssh() {
   audit_authorized_keys
 
   local SSHCFG="/etc/ssh/sshd_config"
-  local BACKUP="${SSHCFG}.bak.$(date +%s)"
+  local BACKUP
+  BACKUP="${SSHCFG}.bak.$(date +%s)"
   run sudo cp "$SSHCFG" "$BACKUP"
   record_backup "$SSHCFG" "$BACKUP"
 
@@ -960,7 +981,8 @@ setup_fail2ban() {
   if ! prompt_yn "Install & enable Fail2ban with the sshd jail?" "y"; then return 0; fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban
   if [ ! -f /etc/fail2ban/jail.local ]; then
-    local JAILBAK="/etc/fail2ban/jail.local.bak.$(date +%s)"
+    local JAILBAK
+    JAILBAK="/etc/fail2ban/jail.local.bak.$(date +%s)"
     run sudo cp /etc/fail2ban/jail.conf "$JAILBAK"
     record_backup /etc/fail2ban/jail.conf "$JAILBAK"
     run sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
@@ -986,6 +1008,10 @@ configure_unattended_upgrades() {
     return 0
   fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
+  if [ -f /etc/apt/apt.conf.d/50unattended-upgrades ] && [ ! -f /var/backups/50unattended-upgrades.bak ]; then
+    run sudo cp /etc/apt/apt.conf.d/50unattended-upgrades /var/backups/50unattended-upgrades.bak
+    record_backup /etc/apt/apt.conf.d/50unattended-upgrades /var/backups/50unattended-upgrades.bak
+  fi
   run sudo sed -i 's|//\s*Unattended-Upgrade::Allowed-Origins|Unattended-Upgrade::Allowed-Origins|' /etc/apt/apt.conf.d/50unattended-upgrades || true
   run sudo sed -i 's|Unattended-Upgrade::Automatic-Reboot "false"|Unattended-Upgrade::Automatic-Reboot "true"|' /etc/apt/apt.conf.d/50unattended-upgrades || true
   ok "Unattended upgrades enabled."
@@ -995,6 +1021,10 @@ harden_sysctl() {
   msg "Kernel/network hardening via sysctl"
   if ! prompt_yn "Apply the 99-hardening.conf sysctl profile from the README?" "y"; then return 0; fi
   local f="/etc/sysctl.d/99-hardening.conf"
+  if [ -f "$f" ] && [ ! -f /var/backups/99-hardening.conf.bak ]; then
+    run sudo cp "$f" /var/backups/99-hardening.conf.bak
+    record_backup "$f" /var/backups/99-hardening.conf.bak
+  fi
   run sudo tee "$f" >/dev/null <<'EOF'
 kernel.dmesg_restrict=1
 kernel.kptr_restrict=2
@@ -1040,11 +1070,19 @@ harden_passwords() {
   msg "Password & lockout policy"
   if ! prompt_yn "Install libpam-pwquality and set minlen=14?" "y"; then return 0; fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libpam-pwquality
+  if [ -f /etc/security/pwquality.conf ] && [ ! -f /var/backups/pwquality.conf.bak ]; then
+    run sudo cp /etc/security/pwquality.conf /var/backups/pwquality.conf.bak
+    record_backup /etc/security/pwquality.conf /var/backups/pwquality.conf.bak
+  fi
   declare -A pwq_vals=( [minlen]=14 [minclass]=3 [maxrepeat]=3 )
   for kw in "${!pwq_vals[@]}"; do
-    grep -q "^$kw[[:space:]]*=" /etc/security/pwquality.conf 2>/dev/null || \
-      echo "$kw = ${pwq_vals[$kw]}" | sudo tee -a /etc/security/pwquality.conf >/dev/null
+    grep -q "^${kw}[[:space:]]*=" /etc/security/pwquality.conf 2>/dev/null || \
+      echo "${kw} = ${pwq_vals[${kw}]}" | sudo tee -a /etc/security/pwquality.conf >/dev/null
   done
+  if [ -f /etc/security/faillock.conf ] && [ ! -f /var/backups/faillock.conf.bak ]; then
+    run sudo cp /etc/security/faillock.conf /var/backups/faillock.conf.bak
+    record_backup /etc/security/faillock.conf /var/backups/faillock.conf.bak
+  fi
   run sudo tee /etc/security/faillock.conf >/dev/null <<'EOF'
 deny = 5
 unlock_time = 900
@@ -1052,6 +1090,10 @@ EOF
   if grep -qE '^TMOUT=900; readonly TMOUT; export TMOUT' /etc/profile.d/99-tmout.sh 2>/dev/null; then
     ok "Password/lockout policy already applied."
     return 0
+  fi
+  if [ -f /etc/profile.d/99-tmout.sh ] && [ ! -f /var/backups/99-tmout.sh.bak ]; then
+    run sudo cp /etc/profile.d/99-tmout.sh /var/backups/99-tmout.sh.bak
+    record_backup /etc/profile.d/99-tmout.sh /var/backups/99-tmout.sh.bak
   fi
   run sudo tee /etc/profile.d/99-tmout.sh >/dev/null <<'EOF'
 TMOUT=900; readonly TMOUT; export TMOUT

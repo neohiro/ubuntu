@@ -167,7 +167,10 @@ network:
     addresses: [127.0.0.1, 1.1.1.1]
 YAML
       warn "If your system uses NetworkManager as the renderer, set 'renderer: NetworkManager' instead."
-      run sudo netplan apply
+      local NP
+      NP=$(command -v netplan 2>/dev/null || echo "/usr/sbin/netplan")
+      if ! [ -x "$NP" ]; then err "netplan not found; skipping 'netplan apply'."; return 0; fi
+      run sudo "$NP" apply
       ;;
     2) # NetworkManager
       warn "NetworkManager will be set to use 127.0.2.1 for DNS on active connections."

@@ -11,7 +11,23 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 ORIG_CWD="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-RECOVERY_CMD="tmux attach -t ubuntu-setup"
+RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
+ROLLBACK_LOG="/var/log/ubuntu-install-rollback.log"
+
+# Append a backup-file line to a single rollback log so the user has one place
+# to find every file we modified and the backup we made before modifying it.
+record_backup() {
+  local original="$1" backup="$2"
+  [ -n "$original" ] && [ -n "$backup" ] || return 0
+  if command -v sudo >/dev/null 2>&1; then
+    printf '%s\t%s\n' "$original" "$backup" | sudo tee -a "$ROLLBACK_LOG" >/dev/null 2>&1 || \
+      printf '%s\t%s\n' "$original" "$backup" >> "$ROLLBACK_LOG" 2>/dev/null || true
+  else
+    printf '%s\t%s\n' "$original" "$backup" >> "$ROLLBACK_LOG" 2>/dev/null || true
+  fi
+  metrics_add configs_backed_up 1
+  metrics_add rollback_logged 1
+}
 
 print_recovery_cmd() {
   printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
@@ -36,16 +52,34 @@ ensure_tmux_if_ssh() {
   [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] || return 0
   if ! command -v tmux >/dev/null 2>&1; then
     if [ "$EUID" -eq 0 ] || command -v sudo >/dev/null 2>&1; then
-      apt-get install -y tmux >/dev/null 2>&1 || sudo apt-get install -y tmux >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y tmux >/dev/null 2>&1 || \
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tmux >/dev/null 2>&1 || true
     fi
   fi
-  command -v tmux >/dev/null 2>&1 || { warn "tmux unavailable; SSH disconnect may kill the run. ${RECOVERY_CMD} will NOT exist - run the script from a local terminal instead."; return 0; }
+  command -v tmux >/dev/null 2>&1 || {
+    warn "tmux unavailable; SSH disconnect may kill the run. ${RECOVERY_CMD} will NOT exist - run the script from a local terminal instead."
+    return 0
+  }
+  [ -n "$SCRIPT_PATH" ] || { warn "SCRIPT_PATH is empty; cannot re-exec inside tmux."; return 0; }
   bold "SSH session detected. Wrapping this run in a tmux session so disconnects do not abort it."
-  exec tmux new-session -A -s ubuntu-setup -n setup \
-    "REPO_RAW_BASE='$REPO_RAW_BASE' \
-     bash -c 'trap \"tmux kill-session -t ubuntu-setup 2>/dev/null\" EXIT; \
-              cd \"$ORIG_CWD\" && bash \"$SCRIPT_PATH\" \"\$@\"; rc=\$?; \
-              if [ \$rc -eq 0 ]; then tmux kill-session -t ubuntu-setup 2>/dev/null; fi; exit \$rc' -- \"\$@\""
+  # Quote everything via env+args (no string interpolation) so paths with spaces
+  # or shell metacharacters survive. The inner bash re-execs the same script
+  # by absolute path; on clean exit it tears the tmux session down.
+  local inner
+  inner=$(cat <<'INNER_EOF'
+trap 'tmux kill-session -t ubuntu-setup 2>/dev/null' EXIT
+cd "$1" && shift
+bash "$1" "$@"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  tmux kill-session -t ubuntu-setup 2>/dev/null
+fi
+exit "$rc"
+INNER_EOF
+)
+  exec env REPO_RAW_BASE="$REPO_RAW_BASE" \
+       tmux new-session -A -s ubuntu-setup -n setup \
+         "env REPO_RAW_BASE='$REPO_RAW_BASE' bash -c $(printf '%q' "$inner") -- $(printf '%q' "$ORIG_CWD") $(printf '%q' "$SCRIPT_PATH")"
 }
 
 bold() { printf "\033[1m%s\033[0m\n" "$*"; }
@@ -106,6 +140,92 @@ run_remote_script() {
 ENV_TYPE=""
 USE_REMOTE_SSH=""
 
+# --- metrics & run summary (shown at the end with a bar chart) ---
+declare -A METRICS=(
+  [pkgs_upgraded]=0
+  [pkgs_installed]=0
+  [services_stopped]=0
+  [services_hardened]=0
+  [sysctls_applied]=0
+  [fw_rules_added]=0
+  [configs_backed_up]=0
+  [tor_services_enabled]=0
+  [auth_keys_added]=0
+  [rollback_logged]=0
+)
+METRICS_START_DISK_KB=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
+
+metrics_add() {
+  local key="$1" delta="${2:-1}"
+  METRICS[$key]=$(( ${METRICS[$key]:-0} + delta ))
+}
+
+_metrics_bar() {
+  local label="$1" value="$2" max="$3" width="${4:-40}"
+  [ "$max" -eq 0 ] 2>/dev/null && max=1
+  [ "$value" -gt "$max" ] 2>/dev/null && value="$max"
+  local filled=$(( value * width / max ))
+  local empty=$(( width - filled ))
+  local bar
+  bar="$(printf '%*s' "$filled" '' | tr ' ' '█')"
+  local bar="${bar}"
+  local empty_str="$(printf '%*s' "$empty" '' | tr ' ' '░')"
+  printf '  %-28s \033[1;32m%s\033[0m\033[1;30m%s\033[0m  %d\n' "$label" "$bar" "$empty_str" "$value"
+}
+
+print_metrics_summary() {
+  local end_disk_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
+  local disk_delta=$(( end_disk_kb - METRICS_START_DISK_KB ))
+  local disk_freed_str
+  if [ "$disk_delta" -gt 0 ]; then
+    disk_freed_str="$(numfmt --to=iec-i --suffix=B "$(( disk_delta * 1024 ))" 2>/dev/null || echo "${disk_delta} KB freed")"
+  else
+    disk_freed_str="N/A (run as root to measure)"
+  fi
+
+  local total="${#METRICS[@]}" max_val=1
+  for v in "${METRICS[@]}"; do
+    [ "$v" -gt "$max_val" ] 2>/dev/null && max_val="$v"
+  done
+
+  printf '\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n'
+  printf '\033[1;36m  RUN SUMMARY  \033[0m'
+  [ "$USE_REMOTE_SSH" = "yes" ] && printf ' \033[1;33m[SSH HARDENED]\033[0m'
+  [ "$ENV_TYPE" = "server" ]  && printf ' \033[1;35m[SERVER MODE]\033[0m'
+  printf '\n'
+  printf '\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n'
+  printf '\n'
+  printf '  \033[1;37mPACKAGES\033[0m\n'
+  _metrics_bar "  Packages upgraded"   "${METRICS[pkgs_upgraded]}"   "$max_val"
+  _metrics_bar "  Packages installed"  "${METRICS[pkgs_installed]}"  "$max_val"
+  printf '\n'
+  printf '  \033[1;37mSECURITY\033[0m\n'
+  _metrics_bar "  Services hardened"  "${METRICS[services_hardened]}" "$max_val"
+  _metrics_bar "  Services stopped"   "${METRICS[services_stopped]}"  "$max_val"
+  _metrics_bar "  sysctls applied"     "${METRICS[sysctls_applied]}"  "$max_val"
+  _metrics_bar "  Firewall rules added" "${METRICS[fw_rules_added]}" "$max_val"
+  printf '\n'
+  printf '  \033[1;37mSSH & AUTHENTICATION\033[0m\n'
+  _metrics_bar "  Auth keys added"     "${METRICS[auth_keys_added]}"   "$max_val"
+  printf '\n'
+  printf '  \033[1;37mTOR\033[0m\n'
+  _metrics_bar "  Tor services enabled" "${METRICS[tor_services_enabled]}" "$max_val"
+  printf '\n'
+  printf '  \033[1;37mBACKUPS & ROLLBACK\033[0m\n'
+  _metrics_bar "  Config files backed up" "${METRICS[configs_backed_up]}" "$max_val"
+  _metrics_bar "  Rollback entries logged" "${METRICS[rollback_logged]}" "$max_val"
+  printf '\n'
+  printf '  \033[1;37mSTORAGE\033[0m\n'
+  printf '  %-28s %s\n' "  Disk freed (approximate)" "$disk_freed_str"
+  printf '\n'
+  if [ "${METRICS[configs_backed_up]}" -gt 0 ]; then
+    printf '  \033[1;33m⚠ Rollback log:\033[0m %s\n' "$ROLLBACK_LOG"
+    printf '  \033[1;30m  Format: original_path    backup_path\033[0m\n'
+    printf '  \033[1;30m  To restore: sudo cp backup_path original_path\033[0m\n'
+  fi
+  printf '\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n'
+}
+
 detect_or_ask_env() {
   if dpkg -l ubuntu-desktop >/dev/null 2>&1 || dpkg -l kubuntu-desktop >/dev/null 2>&1 || dpkg -l xubuntu-desktop >/dev/null 2>&1; then
     ENV_TYPE="desktop"
@@ -150,20 +270,15 @@ ask_category_enabled() {
 update_system() {
   msg "Updating system and installing base packages..."
   _warn_if_not_tmux
+  local upgradable
+  upgradable=$(apt list --upgradable 2>/dev/null | grep -c '/') || upgradable=0
   run sudo DEBIAN_FRONTEND=noninteractive apt-get update
   run sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+  metrics_add pkgs_upgraded "$upgradable"
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
       apt-transport-https software-properties-common \
       wget curl gnupg lsb-release ca-certificates
-}
-
-RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
-
-_warn_if_not_tmux() {
-  [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ] && return 0
-  printf "\033[1;31m[!] SSH DISCONNECT RISK\033[0m  Copy this command before you continue:\n"
-  printf "  \033[1;36m%s\033[0m\n" "$RECOVERY_CMD"
-  printf "  Run it to re-attach after reconnecting over SSH.\n\n"
+  metrics_add pkgs_installed 8
 }
 
 apply_dns_via_nmcli() {
@@ -184,20 +299,24 @@ apply_dns_via_netplan() {
   _warn_if_not_tmux
   info "Applying DNS via netplan..."
   local NP f
-  NP=$(command -v netplan 2>/dev/null || echo /usr/sbin/netplan)
+  NP="$(command -v netplan 2>/dev/null || true)"
+  [ -n "$NP" ] || NP="/usr/sbin/netplan"
   [ -x "$NP" ] || { err "netplan not found."; return 0; }
   f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
   [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
   [ -z "$f" ] && { err "No netplan YAML in /etc/netplan/."; return 0; }
-  run sudo cp "$f" "${f}.bak.$(date +%s)"
+  local bak="${f}.bak.$(date +%s)"
+  run sudo cp "$f" "$bak"
+  record_backup "$f" "$bak"
   run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
 network:
   version: 2
   nameservers:
     addresses: [$DNS_PRIMARY, $DNS_FALLBACK]
 EOF
-  if ! "$NP" apply 2>&1; then
-    err "netplan apply failed - check /etc/netplan/99-dnscrypt.yaml."
+  warn "Applying netplan (60s timeout) - if SSH drops, recovery console + 'sudo netplan apply' restores."
+  if ! timeout 60 "$NP" apply 2>&1; then
+    err "netplan apply failed or timed out. Original config preserved at $bak."
     return 0
   fi
 }
@@ -205,9 +324,27 @@ EOF
 apply_dns_via_systemd_networkd() {
   local DNS_PRIMARY="${1:-127.0.0.1}" DNS_FALLBACK="${2:-1.1.1.1}"
   _warn_if_not_tmux
+  # Restarting systemd-networkd on the active SSH interface can drop the
+  # connection. Detect the interface this SSH session came in on and skip
+  # the restart if it is the one we would touch.
+  local active_if
+  active_if="$(ip -o route show default 2>/dev/null | awk '{print $5}' | head -n1)"
+  if [ -n "$active_if" ] && [ -f "/etc/systemd/network/10-$active_if.network" ] && systemctl is-active --quiet systemd-networkd; then
+    warn "Active SSH interface ($active_if) is managed by systemd-networkd."
+    if ! prompt_yn "Apply DNS via systemd-networkd and restart (may drop SSH - are you in tmux?)" "n"; then
+      info "Skipped systemd-networkd DNS change. Write /etc/systemd/network/99-dnscrypt.network manually."
+      return 0
+    fi
+  fi
   info "Applying DNS via systemd-networkd..."
   run sudo mkdir -p /etc/systemd/network
-  run sudo tee /etc/systemd/network/99-dnscrypt.network >/dev/null <<EOF
+  local f="/etc/systemd/network/99-dnscrypt.network"
+  if [ -f "$f" ]; then
+    local bak="${f}.bak.$(date +%s)"
+    run sudo cp "$f" "$bak"
+    record_backup "$f" "$bak"
+  fi
+  run sudo tee "$f" >/dev/null <<EOF
 [Match]
 Name=*
 
@@ -243,17 +380,20 @@ setup_dnscrypt() {
   prompt_choice "Apply DNS change to point at 127.0.0.1?" \
     "Auto-detect (netplan / NetworkManager / systemd-networkd - applies automatically)" \
     "Skip - do not apply DNS change"
-  case "$REPLY_CHOICE" in
-    1) info "Skipping dnscrypt-proxy."; return 0;;
-  esac
+  if [ "$REPLY_CHOICE" -eq 1 ]; then
+    info "Skipping dnscrypt-proxy."
+    return 0
+  fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dnscrypt-proxy
-  run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.2.1:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+  if ! grep -qE "listen_addresses = \['127.0.0.2:53'\]" /etc/dnscrypt-proxy/dnscrypt-proxy.toml 2>/dev/null; then
+    run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+  fi
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
-  case "$REPLY_CHOICE" in
-    0) _apply_dns_127_0_0_1 ;;
-  esac
-  ok "dnscrypt-proxy installed. Test: dig +short myip.opendns.com @127.0.2.1"
+  _apply_dns_127_0_0_1
+  ok "dnscrypt-proxy installed. Test: dig +short myip.opendns.com @127.0.0.2"
+  metrics_add services_hardened 1
+  metrics_add pkgs_installed 1
 }
 
 setup_firewall() {
@@ -270,10 +410,13 @@ setup_firewall() {
   if [ "$USE_REMOTE_SSH" = "yes" ] || [ "$ENV_TYPE" = "server" ]; then
     warn "Allowing SSH (22) - required for remote access."
     run sudo ufw allow ssh
+    metrics_add fw_rules_added 1
   else
     info "Not opening SSH (no remote SSH usage reported)."
   fi
   run sudo ufw --force enable
+  metrics_add fw_rules_added 2   # default deny + default allow
+  metrics_add services_hardened 1
   run sudo ufw status verbose
 }
 
@@ -283,6 +426,7 @@ setup_tor() {
     info "Skipping Tor."; return 0
   fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tor
+  metrics_add pkgs_installed 1
 
   if [ "$ENV_TYPE" = "server" ]; then
     prompt_choice "Auto-configure Tor (server mode)?" \
@@ -291,19 +435,21 @@ setup_tor() {
       "Both: private transparent proxy AND a relay (combined)" \
       "Leave /etc/tor/torrc untouched"
     case "$REPLY_CHOICE" in
-      0) configure_tor_transparent_proxy ;;
-      1) configure_tor_relay ;;
-      2) configure_tor_combined ;;
+      0) configure_tor_transparent_proxy; metrics_add tor_services_enabled 1 ;;
+      1) configure_tor_relay; metrics_add tor_services_enabled 1 ;;
+      2) configure_tor_combined; metrics_add tor_services_enabled 2 ;;
       3) warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use." ;;
     esac
   else
     if prompt_yn "Set up a minimal Tor relay/middle relay? (no transparent proxy, just relay traffic)" "n"; then
       configure_tor_relay
+      metrics_add tor_services_enabled 1
     else
       warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use."
     fi
   fi
   ok "Tor daemon installed."
+  metrics_add services_hardened 1
 }
 
 configure_tor_combined_apply() {
@@ -414,19 +560,20 @@ ok "Primary tor (transparent proxy) active."
 msg "Configuring relay companion ($ROLE)"
 configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT"
 run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
-run sudo tee "$TORSYSTEMD" >/dev/null <<EOF
+  run sudo tee "$TORSYSTEMD" >/dev/null <<EOF
 [Unit]
 Description=Tor relay (companion to local transparent proxy)
-After=network.target tor.service
-Wants=tor.service
+After=network-online.target nss-lookup.target tor.service
+Wants=network-online.target tor.service
 
 [Service]
-Type=notify
+Type=simple
 ExecStart=/usr/bin/tor -f $RELAYCONF
 User=debian-tor
 Group=debian-tor
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -516,9 +663,11 @@ esac
 NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
 CONTACT="${TOR_CONTACT:-you@example.com}"
 
-local TORRC="/etc/tor/torrc"
-run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
-run sudo tee "$TORRC" >/dev/null <<EOF
+  local TORRC="/etc/tor/torrc"
+  local TORBAK="${TORRC}.bak.$(date +%s)"
+  run sudo cp "$TORRC" "$TORBAK"
+  record_backup "$TORRC" "$TORBAK"
+  run sudo tee "$TORRC" >/dev/null <<EOF
 ORPort $OR_PORT
 DirPort $DIR_PORT
 Nickname $NICK
@@ -585,7 +734,16 @@ disable_ipv6() {
   fi
   run sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
   run sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
-  run sudo sed -i '$a\net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' /etc/sysctl.conf
+  # Ensure sysctl.conf ends in a newline, then append. The '$a\' form forces
+  # a leading newline before the new content so the first appended line
+  # cannot be glued to the previous one.
+  run sudo bash -c 'tail -c1 /etc/sysctl.conf | od -An -c | grep -q "\\n" || printf "\n" >> /etc/sysctl.conf'
+  run sudo tee -a /etc/sysctl.conf >/dev/null <<'EOF'
+
+# disabled by ubuntuinstall.sh
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
   warn "Reboot may be required for full effect."
 }
 
@@ -637,27 +795,40 @@ setup_authorized_keys_with_validation() {
   sudo -u "$target_user" chmod 600 "$target_ak"
 
   local recovery_key="$target_home/.ssh/id_ed25519_recovery"
-  if [ ! -f "$recovery_key" ]; then
+  # The key is owned by $target_user with mode 600; root can stat but the
+  # test below runs as the OUTER shell, not as $target_user, so an
+  # unreadable-by-root mode would trigger spurious regeneration. Use
+  # sudo -u so the file lookup matches the owner.
+  if ! sudo -u "$target_user" test -f "$recovery_key"; then
     info "Generating a server-side recovery key (ed25519) at $recovery_key"
     if ! sudo -u "$target_user" ssh-keygen -t ed25519 -N "" -f "$recovery_key" -C "ubuntu-install-recovery@$(hostname)" 2>/dev/null; then
       err "Could not generate recovery key."
     else
       printf "\n\033[1;33m[!] EMERGENCY RECOVERY KEY\033[0m (printed in case you get locked out):\n"
-      printf "  Private: %s\n  Public:\n" "$recovery_key"
-      cat "$recovery_key.pub"
-      printf "  Save the PRIVATE key to your laptop NOW.\n\n"
+      printf "  Path on server: %s\n" "$recovery_key"
+      printf "  Copy it to your laptop now:  scp %s@%s:%s ~/\n" "$target_user" "$(hostname)" "$recovery_key"
+      printf "  Then 'ssh-add ~/id_ed25519_recovery' before disconnecting.\n"
+      printf "  Public:\n"
+      sudo -u "$target_user" cat "$recovery_key.pub"
+      printf "  (already added to %s)\n\n" "$target_ak"
     fi
   fi
 
-  if ! grep -qF "$(cat "$recovery_key.pub" 2>/dev/null)" "$target_ak" 2>/dev/null; then
+  if ! grep -qF "$(sudo -u "$target_user" cat "$recovery_key.pub" 2>/dev/null)" "$target_ak" 2>/dev/null; then
     sudo -u "$target_user" bash -c "cat '$recovery_key.pub' >> '$target_ak'"
+  fi
+
+  if [ ! -t 0 ]; then
+    err "stdin is not a TTY - cannot paste a public key safely."
+    info "Re-run this script interactively (terminal attached) to set up a key."
+    return 1
   fi
 
   printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
   printf "\033[1;33m│  PASTE YOUR LAPTOP'S PUBLIC SSH KEY BELOW.\033[0m\n"
   printf "\033[1;33m│  Format: ssh-ed25519 AAAA... user@host  OR  ssh-rsa AAAA... user@host\033[0m\n"
   printf "\033[1;33m│  Press Enter on an empty line when done, or type 'skip' to abort.\033[0m\n"
-  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m"
   printf "> "
 
   local pasted_key="" line
@@ -686,11 +857,9 @@ setup_authorized_keys_with_validation() {
     ok "Public key added to $target_ak"
   fi
 
-  if [ -t 0 ]; then
-    if ! prompt_yn "Have you VERIFIED that this public key works (e.g., you can SSH from your laptop with it)?" "n"; then
-      warn "Skipping PasswordAuthentication change - pubkey not confirmed working."
-      return 1
-    fi
+  if ! prompt_yn "Have you VERIFIED that this public key works (e.g., you can SSH from your laptop with it)?" "n"; then
+    warn "Skipping PasswordAuthentication change - pubkey not confirmed working."
+    return 1
   fi
 
   return 0
@@ -715,15 +884,18 @@ harden_ssh() {
   local SSHCFG="/etc/ssh/sshd_config"
   local BACKUP="${SSHCFG}.bak.$(date +%s)"
   run sudo cp "$SSHCFG" "$BACKUP"
+  record_backup "$SSHCFG" "$BACKUP"
 
   if prompt_yn "Set PermitRootLogin no?" "y"; then
     run sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHCFG"
+    metrics_add services_hardened 1
   fi
 
   if prompt_yn "Reduce LoginGraceTime to 30s and MaxAuthTries to 3?" "y"; then
     run sudo sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 30s/' "$SSHCFG"
     run sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' "$SSHCFG"
     run sudo sed -i 's/^#\?MaxSessions.*/MaxSessions 2/' "$SSHCFG"
+    metrics_add services_hardened 1
   fi
 
   if prompt_yn "Change SSH port from 22 to 2222? (can lock you out if firewall not updated)" "n"; then
@@ -733,12 +905,11 @@ harden_ssh() {
     read -r -p "Press Enter to continue, or Ctrl-C to abort... " _
     run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
     run sudo ufw allow 2222/tcp
+    metrics_add fw_rules_added 1
   fi
 
   if prompt_yn "Disable password authentication (PubKey only)? THIS CAN LOCK YOU OUT" "n"; then
-    local keyfile="/root/.ssh/authorized_keys"
-    [ -s "$keyfile" ] || keyfile="$HOME/.ssh/authorized_keys"
-    local ak_count=0
+    local ak_count=0 f c
     for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
       [ -f "$f" ] || continue
       c=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null) || c=0
@@ -754,6 +925,8 @@ harden_ssh() {
       else
         ok "Pubkey validated. Disabling password auth."
         run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+        metrics_add services_hardened 1
+        metrics_add auth_keys_added 1
       fi
     else
       printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
@@ -764,6 +937,7 @@ harden_ssh() {
         warn "Leaving PasswordAuthentication unchanged."
       else
         run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+        metrics_add services_hardened 1
       fi
     fi
   fi
@@ -786,6 +960,9 @@ setup_fail2ban() {
   if ! prompt_yn "Install & enable Fail2ban with the sshd jail?" "y"; then return 0; fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban
   if [ ! -f /etc/fail2ban/jail.local ]; then
+    local JAILBAK="/etc/fail2ban/jail.local.bak.$(date +%s)"
+    run sudo cp /etc/fail2ban/jail.conf "$JAILBAK"
+    record_backup /etc/fail2ban/jail.conf "$JAILBAK"
     run sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
   fi
   if ! grep -qE '^\[sshd\]' /etc/fail2ban/jail.local; then
@@ -798,6 +975,7 @@ JAIL
     run sudo sed -i '/^\[sshd\]/,/^\[/ { /^\[sshd\]/b; /^\[/b; s/^enabled[[:space:]]*=.*/enabled = true/; }' /etc/fail2ban/jail.local
   fi
   run sudo systemctl enable --now fail2ban
+  metrics_add services_hardened 1
 }
 
 configure_unattended_upgrades() {
@@ -845,6 +1023,8 @@ net.ipv6.conf.all.accept_redirects=0
 net.ipv6.conf.default.accept_redirects=0
 EOF
   run sudo sysctl --system
+  metrics_add sysctls_applied 22
+  metrics_add services_hardened 1
 }
 
 setup_apparmor() {
@@ -852,6 +1032,7 @@ setup_apparmor() {
   if ! prompt_yn "Install & enable AppArmor?" "y"; then return 0; fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y apparmor apparmor-utils
   run sudo systemctl enable --now apparmor
+  metrics_add services_hardened 1
   run sudo aa-status || true
 }
 
@@ -930,6 +1111,7 @@ main() {
   ask_other_scripts
 
   bold "Done."
+  print_metrics_summary
   info "Review changes. Reboot when ready: sudo reboot"
   if [ "$USE_REMOTE_SSH" = "yes" ]; then
     info "Because SSH was changed, verify a SECOND session can log in BEFORE closing this one."

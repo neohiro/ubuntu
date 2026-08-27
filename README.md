@@ -16,6 +16,18 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 
 **Profiles:** the script asks which profile to apply — Recommended (safe), Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/DeepClean), or Custom (you confirm every step). Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
 
+### Run summary and rollback
+
+At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:
+
+```bash
+cat /var/log/ubuntu-install-rollback.log
+# format: original_path<TAB>backup_path
+# restore any file with: sudo cp <backup_path> <original_path>
+```
+
+Before touching anything, the script also scans for existing SSH public keys, prints a recovery ed25519 key it generates on the server (so you can `scp` it to your laptop), and refuses to disable `PasswordAuthentication` until a fresh key has been validated.
+
 ### Running over SSH (resumable)
 
 If you launch the script over SSH, the very first thing it does is detect the SSH session and automatically re-exec itself inside a detached `tmux` session named `ubuntu-setup`, so a transient network blip won't abort the run.

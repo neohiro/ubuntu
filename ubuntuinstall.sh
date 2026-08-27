@@ -138,6 +138,63 @@ update_system() {
       wget curl gnupg lsb-release ca-certificates
 }
 
+_apply_dns_127_0_0_1() {
+  local DNS_PRIMARY="127.0.0.1"
+  local DNS_FALLBACK="1.1.1.1"
+  local NP
+  NP=$(command -v netplan 2>/dev/null || echo /usr/sbin/netplan)
+
+  if [ -x "$NP" ] && ls /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null | grep -q .; then
+    info "Renderer: netplan -> writing /etc/netplan/99-dnscrypt.yaml"
+    local f
+    f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
+    [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
+    run sudo cp "$f" "${f}.bak.$(date +%s)"
+    run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
+network:
+  version: 2
+  nameservers:
+    addresses: [$DNS_PRIMARY, $DNS_FALLBACK]
+EOF
+    if ! "$NP" apply 2>&1; then
+      err "netplan apply failed - check /etc/netplan/99-dnscrypt.yaml."
+      return 0
+    fi
+    return 0
+  fi
+
+  if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    info "Renderer: NetworkManager -> setting ipv4.dns on active connections"
+    local conn
+    while IFS= read -r conn; do
+      [ -z "$conn" ] && continue
+      run sudo nmcli con mod "$conn" ipv4.dns "$DNS_PRIMARY $DNS_FALLBACK"
+      run sudo nmcli con mod "$conn" ipv4.ignore-auto-dns yes
+      run sudo nmcli con up "$conn"
+    done < <(sudo nmcli -t -f NAME c show --active)
+    return 0
+  fi
+
+  if command -v networkctl >/dev/null 2>&1; then
+    info "Renderer: systemd-networkd -> writing 99-dnscrypt.network"
+    run sudo mkdir -p /etc/systemd/network
+    run sudo tee /etc/systemd/network/99-dnscrypt.network >/dev/null <<EOF
+[Match]
+Name=*
+
+[Network]
+DNS=$DNS_PRIMARY
+DNS=$DNS_FALLBACK
+EOF
+    run sudo systemctl restart systemd-networkd
+    return 0
+  fi
+
+  err "No supported DNS renderer found (no netplan, no NetworkManager, no systemd-networkd)."
+  info "To set DNS manually, append 'nameserver $DNS_PRIMARY' to /etc/resolv.conf"
+  info "or run: sudo systemctl restart systemd-resolved"
+}
+
 setup_dnscrypt() {
   msg "DNSCrypt (ambiguous: DNS routing method is environment-dependent)"
   prompt_choice "How do you want to point DNS at 127.0.2.1?" \
@@ -153,33 +210,8 @@ setup_dnscrypt() {
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
   case "$REPLY_CHOICE" in
-    1) # netplan
-      local NP
-      NP=$(command -v netplan 2>/dev/null || echo "/usr/sbin/netplan")
-      if ! [ -x "$NP" ]; then
-        err "netplan not found on this system."
-        info "Detected renderer via: networkctl status -a | grep -i network"
-        info "To set DNS manually, add 'nameservers [127.0.0.1]' to your /etc/netplan/*.yaml"
-        info "or use: sudo nmcli con mod <profile> ipv4.dns '127.0.0.1' && sudo nmcli con up <profile>"
-        return 0
-      fi
-      local iface
-      iface=$(ls /etc/netplan/ 2>/dev/null | grep -E '\.ya?ml$' | head -n1)
-      if [ -z "$iface" ]; then err "No netplan YAML found in /etc/netplan/."; return 0; fi
-      warn "About to edit /etc/netplan/$iface. A timestamped backup will be created."
-      run sudo cp "/etc/netplan/$iface" "/etc/netplan/$iface.bak.$(date +%s)"
-      run sudo tee "/etc/netplan/99-dnscrypt.yaml" >/dev/null <<'YAML'
-network:
-  version: 2
-  renderer: networkd
-  nameservers:
-    addresses: [127.0.0.1, 1.1.1.1]
-YAML
-      warn "If your system uses NetworkManager as the renderer, set 'renderer: NetworkManager' instead."
-      if ! "$NP" apply 2>&1; then
-        err "'netplan apply' failed. Check /etc/netplan/99-dnscrypt.yaml for YAML errors."
-        return 0
-      fi
+    1) # netplan (auto-detect renderer if netplan is unavailable)
+      _apply_dns_127_0_0_1
       ;;
     2) # NetworkManager
       warn "NetworkManager will be set to use 127.0.2.1 for DNS on active connections."

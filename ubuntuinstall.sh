@@ -448,7 +448,8 @@ ask_profile() {
     "Recommended (safe, no SSH-lockout risk)" \
     "Standard (includes SSH hardening, Fail2ban, sysctl, AppArmor)" \
     "Full (includes Tor, IPv6 disable, attack-surface reduction, deep clean)" \
-    "Custom (I will be asked per category)"
+    "Custom (I will be asked per category)" \
+    "Maintenance suite (pick individual categories, return to this menu)"
   REPLY_PROFILE=$REPLY_CHOICE
 }
 
@@ -459,7 +460,48 @@ ask_category_enabled() {
     1) [ "$default" = "y" ] || [ "$key" = "ssh" ] || [ "$key" = "fail2ban" ] || [ "$key" = "sysctl" ] || [ "$key" = "pam" ]; return $?;;
     2) return 0;;
     3) prompt_yn "Run: $desc?" "$default"; return $?;;
+    4) return 1;;
   esac
+}
+
+maintenance_menu() {
+  local choice
+  while true; do
+    prompt_choice "Maintenance suite — pick a category (15=exit)" \
+      "System update (apt update + upgrade + base packages)" \
+      "DNSCrypt (DNS encryption)" \
+      "Firewall (UFW)" \
+      "Tor daemon" \
+      "SSH hardening (lockout-prone)" \
+      "Fail2ban (brute-force protection)" \
+      "Unattended security upgrades" \
+      "Disable IPv6 (risky)" \
+      "Kernel/sysctl hardening" \
+      "AppArmor" \
+      "Password & lockout policy" \
+      "OptimizeLinuxASR (attack-surface reduction)" \
+      "DeepClean (cleanup + auto-prune)" \
+      "Other helpers (ubuntusocks / server extras)" \
+      "Back to main menu"
+    choice=$REPLY_CHOICE
+    case $choice in
+      0) mark_step system_update "running"; show_progress; update_system; mark_step system_update "done"; show_progress; msg "Done.";;
+      1) mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; show_progress; msg "Done.";;
+      2) mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; show_progress; msg "Done.";;
+      3) mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; show_progress; msg "Done.";;
+      4) mark_step ssh_hardening "running"; show_progress; harden_ssh; mark_step ssh_hardening "done"; show_progress; msg "Done.";;
+      5) mark_step fail2ban "running"; show_progress; setup_fail2ban; mark_step fail2ban "done"; show_progress; msg "Done.";;
+      6) mark_step unattended "running"; show_progress; configure_unattended_upgrades; mark_step unattended "done"; show_progress; msg "Done.";;
+      7) mark_step ipv6 "running"; show_progress; disable_ipv6; mark_step ipv6 "done"; show_progress; msg "Done.";;
+      8) mark_step sysctl "running"; show_progress; harden_sysctl; mark_step sysctl "done"; show_progress; msg "Done.";;
+      9) mark_step apparmor "running"; show_progress; setup_apparmor; mark_step apparmor "done"; show_progress; msg "Done.";;
+     10) mark_step pam "running"; show_progress; harden_passwords; mark_step pam "done"; show_progress; msg "Done.";;
+     11) mark_step optimize_asr "running"; show_progress; run_optimize_asr; mark_step optimize_asr "done"; show_progress; msg "Done.";;
+     12) mark_step deepclean "running"; show_progress; run_deepclean; mark_step deepclean "done"; show_progress; msg "Done.";;
+     13) mark_step other_scripts "running"; show_progress; ask_other_scripts; mark_step other_scripts "done"; show_progress; msg "Done.";;
+     14) info "Returning to main menu."; break;;
+    esac
+  done
 }
 
 update_system() {
@@ -597,7 +639,12 @@ setup_dnscrypt() {
     info "Skipping dnscrypt-proxy."
     return 0
   fi
-  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dnscrypt-proxy
+  if command -v dpkg >/dev/null 2>&1 && dpkg -s dnscrypt-proxy >/dev/null 2>&1; then
+    info "dnscrypt-proxy is already installed; skipping apt."
+  else
+    info "Installing dnscrypt-proxy (this can take a minute on first install)..."
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dnscrypt-proxy
+  fi
   if [ ! -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
     err "dnscrypt-proxy.toml not found after install - cannot configure."
     return 0
@@ -1700,6 +1747,21 @@ USAGE
   fi
 
   show_progress
+
+  if [ "$REPLY_PROFILE" = "4" ]; then
+    maintenance_menu
+    bold "Done."
+    mark_step summary "running"
+    show_progress
+    print_metrics_summary
+    mark_step summary "done"
+    show_progress
+    info "Review changes. Reboot when ready: sudo reboot"
+    if [ "$USE_REMOTE_SSH" = "yes" ]; then
+      info "Because SSH may have been changed, verify a SECOND session can log in BEFORE closing this one."
+    fi
+    exit 0
+  fi
 
   ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; }
   ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && { mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; }

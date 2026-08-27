@@ -51,15 +51,14 @@ setup_dnscrypt() {
   # Install dnscrypt-proxy.
   run sudo apt-get install -y dnscrypt-proxy
 
-  # Configure DNSCrypt (this part needs review, as the original script
-  #  has some potential issues and non-standard practices).
-  #  The original script had a large block of commented-out configurations.
-  #  I'm simplifying to a basic configuration.  The user should
-  #  review /etc/dnscrypt-proxy/dnscrypt-proxy.toml and configure
-  #  it to their needs.
-  run sudo sed -i 's/# listen_addresses = \[\]/listen_addresses = \['\''127.0.2.1:53'\''\]/' /etc/dnscrypt-proxy/dnscrypt-proxy.toml
-  run sudo systemctl restart dnscrypt-proxy
-  run sudo systemctl enable dnscrypt-proxy
+  if [ -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
+    run sudo sed -i 's/# listen_addresses = \[\]/listen_addresses = \['\''127.0.2.1:53'\''\]/' /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+    run sudo systemctl restart dnscrypt-proxy
+    run sudo systemctl enable dnscrypt-proxy
+  else
+    warn "dnscrypt-proxy.toml not found at /etc/dnscrypt-proxy/ after install."
+    info "Please review the package installation and config manually."
+  fi
 
   # IMPORTANT:  The original script contained instructions to edit
   # /etc/resolv.conf.  This is NOT the recommended way to configure DNS

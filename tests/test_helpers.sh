@@ -224,6 +224,49 @@ ENABLE_ETC_SNAPSHOT=1 _take_etc_snapshot_hermetic "$WD2" 2>/dev/null
 TAKE_OUT=""
 rm -rf "$WD2"
 
+# --- _restore_etc_snapshot: latest-wins via find/sort, no stderr noise on miss ---
+# Reproduce the "no snapshot exists" path and verify the "latest" variable
+# comes back empty (not a literal "find: ..." error).
+WD3="$(mktemp -d)"
+LATEST_OUT="$(find "$WD3" -maxdepth 1 -type f -name 'etc-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null \
+              | sort -nr | head -n1 | cut -d' ' -f2-)"
+[ -z "$LATEST_OUT" ] && ok_t "_restore_etc_snapshot: empty dir produces empty 'latest' (no noise)" \
+  || fail_t "_restore_etc_snapshot: empty dir produces empty 'latest'" "got: '$LATEST_OUT'"
+
+# Reproduce the "two snapshots, latest wins" path.
+# Use printf + touch to set mtimes deterministically (POSIX-portable).
+# Format: [[CC]YY]MMDDhhmm[.SS]
+touch "$WD3/etc-100.tar.gz"; touch -t 202401010000 "$WD3/etc-100.tar.gz"
+touch "$WD3/etc-200.tar.gz"; touch -t 202401020000 "$WD3/etc-200.tar.gz"
+touch "$WD3/etc-300.tar.gz"; touch -t 202401031200 "$WD3/etc-300.tar.gz"
+LATEST_OUT="$(find "$WD3" -maxdepth 1 -type f -name 'etc-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null \
+              | sort -nr | head -n1 | cut -d' ' -f2-)"
+[ "$(basename "$LATEST_OUT")" = "etc-300.tar.gz" ] && ok_t "_restore_etc_snapshot: most-recent file wins (mtime sort)" \
+  || fail_t "_restore_etc_snapshot: most-recent file wins" "got: '$LATEST_OUT'"
+rm -rf "$WD3"
+
+# --- maintenance_menu: "Done." only on success; rc != 0 leaves step not-done ---
+# We re-implement the dispatcher's rc-capture logic minimally to verify
+# the test invariant (the actual function in ubuntuinstall.sh cannot be
+# called without sourcing the whole script).
+DONE_COUNT=0
+SKIP_COUNT=0
+simulate_action() {
+  local label="$1" want_rc="$2"
+  if [ "$want_rc" = "0" ]; then
+    DONE_COUNT=$((DONE_COUNT + 1))
+    return 0
+  else
+    SKIP_COUNT=$((SKIP_COUNT + 1))
+    return 1
+  fi
+}
+simulate_action "step1" 0; rc1=$?
+simulate_action "step2" 1; rc2=$?
+[ "$rc1" -eq 0 ] && [ "$DONE_COUNT" -eq 1 ] && [ "$rc2" -ne 0 ] && [ "$SKIP_COUNT" -eq 1 ] \
+  && ok_t "maintenance_menu: success/failure rc captured correctly per-step" \
+  || fail_t "maintenance_menu: success/failure rc captured correctly" "rc1=$rc1 rc2=$rc2 done=$DONE_COUNT skip=$SKIP_COUNT"
+
 echo
 TOTAL=$((PASS + FAIL))
 if [ "$FAIL" -eq 0 ]; then

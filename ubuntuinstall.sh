@@ -136,7 +136,10 @@ _restore_etc_snapshot() {
   fi
   local snap_dir="/var/backups/etc-snapshots"
   local latest
-  latest=$(ls -t "${snap_dir}"/etc-*.tar.gz 2>/dev/null | head -n1 || true)
+  # Use find to avoid the bash-glob-literal-on-miss problem (and the noisy
+  # stderr that ls produces when the directory is empty or missing).
+  latest=$(find "$snap_dir" -maxdepth 1 -type f -name 'etc-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null \
+           | sort -nr | head -n1 | cut -d' ' -f2-)
   if [ -z "$latest" ]; then
     err "No /etc snapshot found in $snap_dir."
     info "Snapshots are created automatically when ENABLE_ETC_SNAPSHOT=1 (the default)."
@@ -171,8 +174,6 @@ _restore_etc_snapshot() {
 # rollback log.  Skipped if ENABLE_ETC_SNAPSHOT=0 or if /var/backups is
 # not writable.  Only the latest snapshot is kept (old ones are removed).
 _ETC_SNAPSHOT_PATH=""
-_ETC_SNAPSHOT_LOG="/var/log/ubuntu-install-rollback.log"
-_ETC_SNAPSHOT_BACKUP_MARKER="__etc-snapshot__"
 
 _take_etc_snapshot() {
   if [ "${ENABLE_ETC_SNAPSHOT:-1}" = "0" ]; then
@@ -182,14 +183,14 @@ _take_etc_snapshot() {
   local snap_dir="/var/backups/etc-snapshots"
   local snap_path
   snap_path="${snap_dir}/etc-$(date +%s%N).tar.gz"
-  local prev
-  prev=$(ls -t "${snap_dir}"/etc-*.tar.gz 2>/dev/null | head -n1 || true)
 
   if ! sudo mkdir -p "$snap_dir" 2>/dev/null; then
     warn "Cannot create $snap_dir — /etc snapshot skipped."
     return 0
   fi
 
+  # Create the snapshot.  On failure, remove the partial file so a future
+  # run does not pick up a half-written tarball.
   if sudo tar -czf "$snap_path" \
      --exclude='/etc/ssl/private' \
      --exclude='/etc/ssh/ssh_host_*_key' \
@@ -199,16 +200,16 @@ _take_etc_snapshot() {
      -C / etc 2>/dev/null; then
     sudo chmod 600 "$snap_path"
     _ETC_SNAPSHOT_PATH="$snap_path"
-    # Remove previous snapshot (keep only the latest)
-    if [ -n "$prev" ] && [ "$prev" != "$snap_path" ]; then
-      sudo rm -f "$prev"
-    fi
+    # Remove all older snapshots, keep only the new one
+    local prev
+    while IFS= read -r prev; do
+      [ -n "$prev" ] && [ "$prev" != "$snap_path" ] && sudo rm -f "$prev" 2>/dev/null
+    done < <(find "$snap_dir" -maxdepth 1 -type f -name 'etc-*.tar.gz' ! -path "$snap_path" 2>/dev/null)
     info "Created /etc snapshot: $snap_path"
-    info "  Full /etc restore:  sudo tar -xzf $snap_path -C /"
+    info "  Full /etc restore:  sudo bash $0 --restore-etc-snapshot"
     info "  (May need sudo systemd-resolve --reload if /etc/resolv.conf was reverted)"
-    # Record in rollback log so --rollback knows about it
-    record_backup "$_ETC_SNAPSHOT_BACKUP_MARKER" "$snap_path"
   else
+    sudo rm -f "$snap_path" 2>/dev/null
     warn "Failed to create /etc snapshot — continuing without it."
   fi
 }
@@ -560,7 +561,7 @@ ask_category_enabled() {
 }
 
 maintenance_menu() {
-  local choice
+  local choice rc
   while true; do
     prompt_choice "Maintenance suite — pick a category (15=exit)" \
       "System update (apt update + upgrade + base packages)" \
@@ -579,23 +580,30 @@ maintenance_menu() {
       "Other helpers (ubuntusocks / server extras)" \
       "Back to main menu"
     choice=$REPLY_CHOICE
+    rc=0
     case $choice in
-      0) mark_step system_update "running"; show_progress; update_system; mark_step system_update "done"; show_progress; msg "Done.";;
-      1) mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; show_progress; msg "Done.";;
-      2) mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; show_progress; msg "Done.";;
-      3) mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; show_progress; msg "Done.";;
-      4) mark_step ssh_hardening "running"; show_progress; harden_ssh; mark_step ssh_hardening "done"; show_progress; msg "Done.";;
-      5) mark_step fail2ban "running"; show_progress; setup_fail2ban; mark_step fail2ban "done"; show_progress; msg "Done.";;
-      6) mark_step unattended "running"; show_progress; configure_unattended_upgrades; mark_step unattended "done"; show_progress; msg "Done.";;
-      7) mark_step ipv6 "running"; show_progress; disable_ipv6; mark_step ipv6 "done"; show_progress; msg "Done.";;
-      8) mark_step sysctl "running"; show_progress; harden_sysctl; mark_step sysctl "done"; show_progress; msg "Done.";;
-      9) mark_step apparmor "running"; show_progress; setup_apparmor; mark_step apparmor "done"; show_progress; msg "Done.";;
-     10) mark_step pam "running"; show_progress; harden_passwords; mark_step pam "done"; show_progress; msg "Done.";;
-     11) mark_step optimize_asr "running"; show_progress; run_optimize_asr; mark_step optimize_asr "done"; show_progress; msg "Done.";;
-     12) mark_step deepclean "running"; show_progress; run_deepclean; mark_step deepclean "done"; show_progress; msg "Done.";;
-     13) mark_step other_scripts "running"; show_progress; ask_other_scripts; mark_step other_scripts "done"; show_progress; msg "Done.";;
+      0) mark_step system_update "running"; show_progress; update_system   || rc=$?; mark_step system_update "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      1) mark_step dnscrypt "running";      show_progress; setup_dnscrypt  || rc=$?; mark_step dnscrypt      "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      2) mark_step firewall "running";     show_progress; setup_firewall   || rc=$?; mark_step firewall     "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      3) mark_step tor "running";          show_progress; setup_tor        || rc=$?; mark_step tor          "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      4) mark_step ssh_hardening "running"; show_progress; harden_ssh       || rc=$?; mark_step ssh_hardening "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      5) mark_step fail2ban "running";     show_progress; setup_fail2ban   || rc=$?; mark_step fail2ban     "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      6) mark_step unattended "running";   show_progress; configure_unattended_upgrades || rc=$?; mark_step unattended "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      7) mark_step ipv6 "running";         show_progress; disable_ipv6     || rc=$?; mark_step ipv6         "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      8) mark_step sysctl "running";       show_progress; harden_sysctl    || rc=$?; mark_step sysctl       "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      9) mark_step apparmor "running";     show_progress; setup_apparmor   || rc=$?; mark_step apparmor     "$([ $rc -eq 0 ] && echo done || echo skip)";;
+     10) mark_step pam "running";          show_progress; harden_passwords || rc=$?; mark_step pam          "$([ $rc -eq 0 ] && echo done || echo skip)";;
+     11) mark_step optimize_asr "running"; show_progress; run_optimize_asr || rc=$?; mark_step optimize_asr "$([ $rc -eq 0 ] && echo done || echo skip)";;
+     12) mark_step deepclean "running";    show_progress; run_deepclean    || rc=$?; mark_step deepclean    "$([ $rc -eq 0 ] && echo done || echo skip)";;
+     13) mark_step other_scripts "running";show_progress; ask_other_scripts|| rc=$?; mark_step other_scripts "$([ $rc -eq 0 ] && echo done || echo skip)";;
      14) info "Returning to main menu."; break;;
     esac
+    if [ $rc -eq 0 ]; then
+      ok "Done."
+    else
+      err "Action returned non-zero exit ($rc). Continuing."
+    fi
+    show_progress
   done
 }
 

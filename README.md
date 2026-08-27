@@ -273,9 +273,9 @@ See what is listening and decide whether it should be:
 ss -tulnp
 ```
 Disable daemons a desktop rarely needs (skip this on servers using them):
-```bash
-sudo systemctl disable --now bluetooth cups
-```
+
+Run this script to reduce surface attack and optimize linux: [OptimizeLinuxASR](https://github.com/neohiro/ubuntu/blob/main/OptimizeLinuxASR.sh)
+
 Only allow listed users to schedule jobs:
 ```bash
 sudo touch /etc/cron.allow && echo "$USER" | sudo tee /etc/cron.allow

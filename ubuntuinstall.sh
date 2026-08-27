@@ -651,35 +651,31 @@ setup_tor() {
 }
 
 configure_tor_combined_apply() {
-local CONF="$1" ROLE="$2" OR_PORT="$3" DIR_PORT="$4" NICK="$5" CONTACT="$6"
-local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
-local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
-local RELAYDIR="/var/lib/tor-relay" RELAYLOG="/var/log/tor/relay-notices.log"
+  local CONF="$1" ROLE="$2" OR_PORT="$3" DIR_PORT="$4" NICK="$5" CONTACT="$6"
+  local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
+  local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
+  local RELAYDIR="/var/lib/tor-relay" RELAYLOG="/var/log/tor/relay-notices.log"
 run sudo mkdir -p "$RELAYDIR" "/var/log/tor"
-run sudo tee "$CONF" >/dev/null <<CONFEOF
-ORPort $OR_PORT
-DirPort $DIR_PORT
-Nickname $NICK
-ContactInfo $CONTACT
-DataDirectory $RELAYDIR
-Log notice file $RELAYLOG
-
-BandwidthRate ${BW_RATE} MBytes
-BandwidthBurst ${BW_BURST} MBytes
-AccountingMax $ACCT_MAX
-AccountingStart day 1 00:00
-
-AvoidDiskWrites 1
-DisableAllSwap 1
-DisableDebuggerAttachment 1
-CloseUnknownConnection 1
-
-ConnLimit 512
-MaxCircuitDirtiness 10 minutes
-NumEntryGuards 6
-SafeLogging 1
-
-CONFEOF
+  {
+    printf 'ORPort %s\n' "$OR_PORT"
+    printf 'DirPort %s\n' "$DIR_PORT"
+    printf 'Nickname %s\n' "$NICK"
+    printf 'ContactInfo %s\n' "$CONTACT"
+    printf 'DataDirectory %s\n' "$RELAYDIR"
+    printf 'Log notice file %s\n' "$RELAYLOG"
+    printf '\nBandwidthRate %s MBytes\n' "${BW_RATE}"
+    printf 'BandwidthBurst %s MBytes\n' "${BW_BURST}"
+    printf 'AccountingMax %s\n' "$ACCT_MAX"
+    printf 'AccountingStart day 1 00:00\n'
+    printf '\nAvoidDiskWrites 1\n'
+    printf 'DisableAllSwap 1\n'
+    printf 'DisableDebuggerAttachment 1\n'
+    printf 'CloseUnknownConnection 1\n'
+    printf '\nConnLimit 512\n'
+    printf 'MaxCircuitDirtiness 10 minutes\n'
+    printf 'NumEntryGuards 6\n'
+    printf 'SafeLogging 1\n'
+  } | run sudo tee "$CONF" >/dev/null
 case "$ROLE" in
   0) run sudo tee -a "$CONF" >/dev/null <<'EXITEOF'
 ExitPolicy reject *:*
@@ -721,14 +717,14 @@ prompt_choice "Pick a relay role to run alongside the transparent proxy" \
   "Middle relay (default, recommended for first-time)" \
   "Exit relay (only on a server you own and trust - legal implications)" \
   "Bridge relay (helps censored users)"
-ROLE=$REPLY_CHOICE
+ROLE="$REPLY_CHOICE"
 case "$ROLE" in
   0) OR_PORT="9001"; DIR_PORT="9030";;
   1) OR_PORT="443";   DIR_PORT="80";  warn "Exit relay exposes your IP for other users' traffic.";;
   2) OR_PORT="9001";  DIR_PORT="9030";;
 esac
-NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
-CONTACT="${TOR_CONTACT:-you@example.com}"
+local NICK="${TOR_NICK:-$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || true; echo UbuntuServer)}"
+local CONTACT="${TOR_CONTACT:-you@example.com}"
 
 local RELAYCONF="/etc/tor/torrc.relay"
 local TORSYSTEMD="/etc/systemd/system/tor-relay.service"
@@ -753,6 +749,7 @@ DirPort 0
 EOF
 _warn_if_not_tmux
 run sudo systemctl restart tor
+  local tor_backup
   local tor_backup
   if ! sudo systemctl is-active --quiet tor; then
     err "Primary tor failed - restoring torrc and aborting combined setup."
@@ -785,7 +782,7 @@ Wants=network-online.target tor.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/tor -f $RELAYCONF
+ExecStart=/usr/bin/tor -f "$RELAYCONF"
 User=debian-tor
 Group=debian-tor
 Restart=on-failure
@@ -876,39 +873,36 @@ local BW_RATE="${TOR_BANDWIDTH_RATE:-10}"
 local BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
 local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
 prompt_choice "Pick a relay role" "Middle relay (default, recommended for first-time)" "Exit relay (only on a server you own and trust)" "Bridge relay (helps censored users)"
-ROLE=$REPLY_CHOICE
+ROLE="$REPLY_CHOICE"
 case "$ROLE" in
   0) OR_PORT="auto"; DIR_PORT="auto";;
   1) OR_PORT="443";   DIR_PORT="80";   warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
   2) OR_PORT="auto";  DIR_PORT="auto";;
 esac
-NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
-CONTACT="${TOR_CONTACT:-you@example.com}"
+local NICK="${TOR_NICK:-$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || true; echo UbuntuServer)}"
+local CONTACT="${TOR_CONTACT:-you@example.com}"
 
   local TORRC="/etc/tor/torrc"
   local TORBAK
   TORBAK="${TORRC}.bak.$(date +%s)"
   run sudo cp "$TORRC" "$TORBAK"
   record_backup "$TORRC" "$TORBAK"
-  run sudo tee "$TORRC" >/dev/null <<EOF
-ORPort $OR_PORT
-DirPort $DIR_PORT
-Nickname $NICK
-ContactInfo $CONTACT
-Log notice file /var/log/tor/notices.log
-
-BandwidthRate ${BW_RATE} MBytes
-BandwidthBurst ${BW_BURST} MBytes
-AccountingMax $ACCT_MAX
-AccountingStart day 1 00:00
-
-AvoidDiskWrites 1
-DisableAllSwap 1
-DisableDebuggerAttachment 1
-CloseUnknownConnection 1
-SafeLogging 1
-
-EOF
+  {
+    printf 'ORPort %s\n' "$OR_PORT"
+    printf 'DirPort %s\n' "$DIR_PORT"
+    printf 'Nickname %s\n' "$NICK"
+    printf 'ContactInfo %s\n' "$CONTACT"
+    printf 'Log notice file /var/log/tor/notices.log\n'
+    printf '\nBandwidthRate %s MBytes\n' "${BW_RATE}"
+    printf 'BandwidthBurst %s MBytes\n' "${BW_BURST}"
+    printf 'AccountingMax %s\n' "$ACCT_MAX"
+    printf 'AccountingStart day 1 00:00\n'
+    printf '\nAvoidDiskWrites 1\n'
+    printf 'DisableAllSwap 1\n'
+    printf 'DisableDebuggerAttachment 1\n'
+    printf 'CloseUnknownConnection 1\n'
+    printf 'SafeLogging 1\n'
+  } | run sudo tee "$TORRC" >/dev/null
 case "$ROLE" in
   0)
     run sudo tee -a "$TORRC" >/dev/null <<'EXITEOF'
@@ -985,11 +979,22 @@ EOF
 # /etc/ssh/sshd_config.d/*.conf is correctly rewritten.
 _set_or_append_sshd_config() {
   local param="$1" value="$2" cfg="$3"
-  if grep -qE "^[[:space:]]*#[[:space:]]*${param}[[:space:]]" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null || \
-     grep -qE "^${param}[[:space:]]" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
-    run sudo sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" "$cfg"
+  # If the parameter lives in a drop-in (Include /etc/ssh/sshd_config.d/*.conf
+  # is processed before the main file's directives, so first-set wins),
+  # edit the drop-in there. Otherwise update the main config.
+  local target="$cfg"
+  local dropin
+  for dropin in /etc/ssh/sshd_config.d/*.conf; do
+    [ -f "$dropin" ] || continue
+    if grep -qE "^[[:space:]]*#?[[:space:]]*${param}[[:space:]]" "$dropin"; then
+      target="$dropin"
+      break
+    fi
+  done
+  if grep -qE "^[[:space:]]*#?[[:space:]]*${param}[[:space:]]" "$target"; then
+    run sudo sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" "$target"
   else
-    printf '%s %s\n' "$param" "$value" | run sudo tee -a "$cfg" >/dev/null
+    printf '%s %s\n' "$param" "$value" | run sudo tee -a "$target" >/dev/null
   fi
 }
 
@@ -1408,13 +1413,10 @@ rollback_mode() {
     return 0
   fi
 
-  # Parse the log. Comments (#) and blank lines are ignored. The first
-  # TAB on a line separates original from backup; any further TABs are
-  # part of the backup path.
   # We use a map (original -> latest backup) so multiple entries for the
   # same file collapse to the most recent one (the actual semantics the
   # user wants: "restore the latest backup of each file").
-  declare -A LATEST_BAK
+  local -A LATEST_BAK
   local -a missing
   local line orig bak
   while IFS= read -r line || [ -n "$line" ]; do

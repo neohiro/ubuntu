@@ -197,29 +197,19 @@ EOF
 
 setup_dnscrypt() {
   msg "DNSCrypt (ambiguous: DNS routing method is environment-dependent)"
-  prompt_choice "How do you want to point DNS at 127.0.2.1?" \
-    "Install dnscrypt-proxy, leave DNS config to me (manual)" \
-    "Install dnscrypt-proxy + configure via netplan (server)" \
-    "Install dnscrypt-proxy + configure via NetworkManager (desktop)" \
-    "Skip - do not install dnscrypt-proxy"
+  prompt_choice "Apply DNS change to point at 127.0.0.1?" \
+    "Auto-detect (netplan / NetworkManager / systemd-networkd - applies automatically)" \
+    "Skip - do not apply DNS change"
   case "$REPLY_CHOICE" in
-    3) info "Skipping dnscrypt-proxy."; return 0;;
+    1) info "Skipping dnscrypt-proxy."; return 0;;
   esac
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dnscrypt-proxy
   run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.2.1:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
   case "$REPLY_CHOICE" in
-    1) # netplan (auto-detect renderer if netplan is unavailable)
+    0) # auto-detect renderer and apply
       _apply_dns_127_0_0_1
-      ;;
-    2) # NetworkManager
-      warn "NetworkManager will be set to use 127.0.2.1 for DNS on active connections."
-      run sudo nmcli -t -f NAME c show --active | while read -r c; do
-        [ -z "$c" ] && continue
-        run sudo nmcli con mod "$c" ipv4.dns "127.0.2.1"
-        run sudo nmcli con up "$c"
-      done
       ;;
   esac
   ok "dnscrypt-proxy installed. Test: dig +short myip.opendns.com @127.0.2.1"

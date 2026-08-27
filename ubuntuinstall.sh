@@ -154,6 +154,15 @@ setup_dnscrypt() {
   run sudo systemctl enable dnscrypt-proxy
   case "$REPLY_CHOICE" in
     1) # netplan
+      local NP
+      NP=$(command -v netplan 2>/dev/null || echo "/usr/sbin/netplan")
+      if ! [ -x "$NP" ]; then
+        err "netplan not found on this system."
+        info "Detected renderer via: networkctl status -a | grep -i network"
+        info "To set DNS manually, add 'nameservers [127.0.0.1]' to your /etc/netplan/*.yaml"
+        info "or use: sudo nmcli con mod <profile> ipv4.dns '127.0.0.1' && sudo nmcli con up <profile>"
+        return 0
+      fi
       local iface
       iface=$(ls /etc/netplan/ 2>/dev/null | grep -E '\.ya?ml$' | head -n1)
       if [ -z "$iface" ]; then err "No netplan YAML found in /etc/netplan/."; return 0; fi
@@ -167,10 +176,10 @@ network:
     addresses: [127.0.0.1, 1.1.1.1]
 YAML
       warn "If your system uses NetworkManager as the renderer, set 'renderer: NetworkManager' instead."
-      local NP
-      NP=$(command -v netplan 2>/dev/null || echo "/usr/sbin/netplan")
-      if ! [ -x "$NP" ]; then err "netplan not found; skipping 'netplan apply'."; return 0; fi
-      run sudo "$NP" apply
+      if ! "$NP" apply 2>&1; then
+        err "'netplan apply' failed. Check /etc/netplan/99-dnscrypt.yaml for YAML errors."
+        return 0
+      fi
       ;;
     2) # NetworkManager
       warn "NetworkManager will be set to use 127.0.2.1 for DNS on active connections."

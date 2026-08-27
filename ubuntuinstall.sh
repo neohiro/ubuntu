@@ -284,14 +284,147 @@ setup_tor() {
   fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tor
 
-  if [ "$ENV_TYPE" = "server" ] && prompt_yn "Auto-configure Tor as a transparent proxy (server mode)? (routes ALL TCP/UDP 80+443 through Tor; apt updates will be slow)" "n"; then
-    configure_tor_transparent_proxy
-  elif prompt_yn "Set up a minimal Tor relay/middle relay? (no transparent proxy, just relay traffic)" "n"; then
-    configure_tor_relay
+  if [ "$ENV_TYPE" = "server" ]; then
+    prompt_choice "Auto-configure Tor (server mode)?" \
+      "Transparent proxy only (route this host's traffic through Tor)" \
+      "Relay only (middle / exit / bridge - help other Tor users)" \
+      "Both: private transparent proxy AND a relay (combined)" \
+      "Leave /etc/tor/torrc untouched"
+    case "$REPLY_CHOICE" in
+      0) configure_tor_transparent_proxy ;;
+      1) configure_tor_relay ;;
+      2) configure_tor_combined ;;
+      3) warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use." ;;
+    esac
   else
-    warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use."
+    if prompt_yn "Set up a minimal Tor relay/middle relay? (no transparent proxy, just relay traffic)" "n"; then
+      configure_tor_relay
+    else
+      warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use."
+    fi
   fi
   ok "Tor daemon installed."
+}
+
+configure_tor_combined() {
+  msg "Combined: transparent proxy + relay (single Tor instance, two roles)"
+  local NICK OR_PORT DIR_PORT CONTACT ROLE
+  prompt_choice "Pick a relay role to run alongside the transparent proxy" \
+    "Middle relay (default, recommended for first-time)" \
+    "Exit relay (only on a server you own and trust - legal implications)" \
+    "Bridge relay (helps censored users)"
+  ROLE=$REPLY_CHOICE
+  case "$ROLE" in
+    0) OR_PORT="9001"; DIR_PORT="9030";;
+    1) OR_PORT="443";   DIR_PORT="80";  warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
+    2) OR_PORT="9001";  DIR_PORT="9030";;
+  esac
+  NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
+  CONTACT="${TOR_CONTACT:-you@example.com}"
+
+  local TORRC="/etc/tor/torrc"
+  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+  run sudo tee "$TORRC" >/dev/null <<EOF
+VirtualAddrNetwork 10.192.0.0/10
+AutomapHostsOnResolve 1
+AutomapHostsSuffixes .onion,.exit
+TransPort 127.0.0.1:9040 IsolateClientAddr IsolateClientProtocol IsolateDestAddr IsolateDestPort
+DNSPort 127.0.0.2:53
+Log notice file /var/log/tor/notices.log
+
+ORPort $OR_PORT NoListen
+DirPort $DIR_PORT NoListen
+Nickname $NICK
+ContactInfo $CONTACT
+EOF
+  if [ "$ROLE" -eq 0 ]; then
+    run sudo tee -a "$TORRC" >/dev/null <<'EOF'
+
+ExitPolicy reject *:*
+EOF
+  elif [ "$ROLE" -eq 1 ]; then
+    run sudo tee -a "$TORRC" >/dev/null <<'EOF'
+
+ExitPolicy accept *:*
+EOF
+  fi
+
+  _warn_if_not_tmux
+  run sudo systemctl restart tor
+  if ! sudo systemctl is-active --quiet tor; then
+    err "tor failed to start - check: sudo journalctl -u tor --no-pager | tail -30"
+    run sudo cp -f "${TORRC}.bak."* "$TORRC" 2>/dev/null
+    return 1
+  fi
+
+  msg "Now configuring relay sockets in a separate tor instance (transparent proxy stays on 9040/9053)"
+  local RELAYDIR="/var/lib/tor-relay"
+  local RELAYCONF="/etc/tor/torrc.relay"
+  run sudo mkdir -p "$RELAYDIR"
+  run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
+  run sudo tee "$RELAYCONF" >/dev/null <<EOF
+ORPort $OR_PORT
+DirPort $DIR_PORT
+Nickname $NICK
+ContactInfo $CONTACT
+DataDirectory $RELAYDIR
+Log notice file /var/log/tor/relay-notices.log
+EOF
+  if [ "$ROLE" -eq 0 ]; then
+    run sudo bash -c "echo 'ExitPolicy reject *:*' >> '$RELAYCONF'"
+  elif [ "$ROLE" -eq 1 ]; then
+    run sudo bash -c "echo 'ExitPolicy accept *:*' >> '$RELAYCONF'"
+  fi
+  run sudo ufw allow "$OR_PORT"/tcp
+  run sudo ufw allow "$DIR_PORT"/tcp
+
+  run sudo tee /etc/systemd/system/tor-relay.service >/dev/null <<EOF
+[Unit]
+Description=Tor relay instance (companion to local transparent proxy)
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/tor -f $RELAYCONF
+User=debian-tor
+Group=debian-tor
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run sudo systemctl daemon-reload
+  run sudo systemctl enable --now tor-relay.service
+  if ! sudo systemctl is-active --quiet tor-relay.service; then
+    err "tor-relay service failed - check: sudo journalctl -u tor-relay --no-pager | tail -30"
+  else
+    ok "tor-relay service is active on $OR_PORT/$DIR_PORT."
+  fi
+
+  _warn_if_not_tmux
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+  local cmds=(
+    "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
+    "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p tcp --dport $OR_PORT -j RETURN"
+    "iptables -t nat -A OUTPUT -p tcp --dport $DIR_PORT -j RETURN"
+  )
+  for c in "${cmds[@]}"; do
+    run sudo $c
+  done
+  run sudo netfilter-persistent save
+  ok "Transparent proxy + relay active together."
+  info "Verify exit: curl --max-time 10 https://check.torproject.org/api/ip"
+  info "Verify relay: https://metrics.torproject.org/rs.html (search nickname: $NICK)"
+  warn "apt updates will be slow. Revert: sudo iptables -t nat -F OUTPUT"
 }
 
 configure_tor_transparent_proxy() {

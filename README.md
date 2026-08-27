@@ -62,6 +62,8 @@ If you rebooted and SSH now refuses connections, sshd is not listening on the po
    #   ls /mnt/etc/ssh/sshd_config.bak.*  and  cp <latest> /mnt/etc/ssh/sshd_config
    umount /mnt; reboot
    ```
+   
+### Manual steps (no scripts, mostly)
 
 ```bash
 sudo passwd root

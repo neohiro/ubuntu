@@ -19,11 +19,14 @@ ROLLBACK_LOG="/var/log/ubuntu-install-rollback.log"
 record_backup() {
   local original="$1" backup="$2"
   [ -n "$original" ] && [ -n "$backup" ] || return 0
-  if command -v sudo >/dev/null 2>&1; then
-    printf '%s\t%s\n' "$original" "$backup" | sudo tee -a "$ROLLBACK_LOG" >/dev/null 2>&1 || \
-      printf '%s\t%s\n' "$original" "$backup" >> "$ROLLBACK_LOG" 2>/dev/null || true
+  local line
+  line="$(printf '%s\t%s\n' "$original" "$backup")"
+  # As root without sudo: write directly. Otherwise: sudo tee so the log
+  # remains root-owned in /var/log.
+  if [ "$EUID" -eq 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    printf '%s' "$line" >> "$ROLLBACK_LOG" 2>/dev/null || true
   else
-    printf '%s\t%s\n' "$original" "$backup" >> "$ROLLBACK_LOG" 2>/dev/null || true
+    printf '%s' "$line" | sudo tee -a "$ROLLBACK_LOG" >/dev/null 2>&1 || true
   fi
   metrics_add configs_backed_up 1
   metrics_add rollback_logged 1
@@ -102,7 +105,16 @@ prompt_yn() {
   local q="$1" def="${2:-N}"
   local hint="[y/N]"; [ "$def" = "y" ] || [ "$def" = "Y" ] && hint="[Y/n]"
   local a
-  read -r -p "$q $hint " a
+  if [ -t 0 ]; then
+    read -r -p "$q $hint " a
+  elif [ -e /dev/tty ] && [ -r /dev/tty ]; then
+    printf '%s %s ' "$q" "$hint" >/dev/tty
+    read -r a </dev/tty
+  else
+    # No interactive terminal available - use the default and warn.
+    warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to '$def' for: $q"
+    a="$def"
+  fi
   a="${a:-$def}"
   case "$a" in [Yy]*) return 0;; *) return 1;; esac
 }
@@ -114,7 +126,15 @@ prompt_choice() {
   echo "$q"
   for o in "${opts[@]}"; do printf "  %d) %s\n" "$i" "$o"; i=$((i+1)); done
   local a
-  read -r -p "Choose [1-${#opts[@]}] (default 1): " a
+  if [ -t 0 ]; then
+    read -r -p "Choose [1-${#opts[@]}] (default 1): " a
+  elif [ -e /dev/tty ] && [ -r /dev/tty ]; then
+    printf 'Choose [1-%d] (default 1): ' "${#opts[@]}" >/dev/tty
+    read -r a </dev/tty
+  else
+    warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to 1 for: $q"
+    a=1
+  fi
   a="${a:-1}"
   if ! [[ "$a" =~ ^[0-9]+$ ]] || [ "$a" -lt 1 ] || [ "$a" -gt ${#opts[@]} ]; then
     a=1
@@ -183,7 +203,7 @@ print_metrics_summary() {
     disk_freed_str="N/A (run as root to measure)"
   fi
 
-  local total="${#METRICS[@]}" max_val=1
+  local max_val=1
   for v in "${METRICS[@]}"; do
     [ "$v" -gt "$max_val" ] 2>/dev/null && max_val="$v"
   done
@@ -286,12 +306,18 @@ apply_dns_via_nmcli() {
   _warn_if_not_tmux
   info "Setting DNS on active NetworkManager connections..."
   local conn
+  local active_count=0
   while IFS= read -r conn; do
     [ -z "$conn" ] && continue
+    active_count=$((active_count + 1))
     run sudo nmcli con mod "$conn" ipv4.dns "$DNS_PRIMARY $DNS_FALLBACK"
     run sudo nmcli con mod "$conn" ipv4.ignore-auto-dns yes
     run sudo nmcli con up "$conn"
   done < <(sudo nmcli -t -f NAME c show --active)
+  if [ "$active_count" -eq 0 ]; then
+    warn "No active NetworkManager connections found; DNS not changed."
+    info "Activate a connection first, then re-run, or edit /etc/resolv.conf manually."
+  fi
 }
 
 apply_dns_via_netplan() {
@@ -302,9 +328,14 @@ apply_dns_via_netplan() {
   NP="$(command -v netplan 2>/dev/null || true)"
   [ -n "$NP" ] || NP="/usr/sbin/netplan"
   [ -x "$NP" ] || { err "netplan not found."; return 0; }
-  f=$(ls /etc/netplan/*.yaml 2>/dev/null | head -n1)
-  [ -z "$f" ] && f=$(ls /etc/netplan/*.yml 2>/dev/null | head -n1)
-  [ -z "$f" ] && { err "No netplan YAML in /etc/netplan/."; return 0; }
+  f=""
+  for candidate in /etc/netplan/*.yaml /etc/netplan/*.yml; do
+    if [ -f "$candidate" ]; then
+      f="$candidate"
+      break
+    fi
+  done
+  [ -n "$f" ] || { err "No netplan YAML in /etc/netplan/."; return 0; }
   local bak
   bak="${f}.bak.$(date +%s)"
   run sudo cp "$f" "$bak"
@@ -550,10 +581,15 @@ CONTACT="${TOR_CONTACT:-you@example.com}"
 local RELAYCONF="/etc/tor/torrc.relay"
 local TORSYSTEMD="/etc/systemd/system/tor-relay.service"
 
-msg "Configuring primary tor (transparent proxy role)"
-local TORRC="/etc/tor/torrc"
-run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
-run sudo tee "$TORRC" >/dev/null <<'EOF'
+  msg "Configuring primary tor (transparent proxy role)"
+  local TORRC="/etc/tor/torrc"
+  if [ -f "$TORRC" ]; then
+    local TORBAK
+    TORBAK="${TORRC}.bak.$(date +%s)"
+    run sudo cp "$TORRC" "$TORBAK"
+    record_backup "$TORRC" "$TORBAK"
+  fi
+  run sudo tee "$TORRC" >/dev/null <<'EOF'
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 AutomapHostsSuffixes .onion,.exit
@@ -572,8 +608,20 @@ if ! sudo systemctl is-active --quiet tor; then
 fi
 ok "Primary tor (transparent proxy) active."
 
-msg "Configuring relay companion ($ROLE)"
-configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT"
+  msg "Configuring relay companion ($ROLE)"
+  if [ -f "$RELAYCONF" ] && ! compgen -G "${RELAYCONF}.bak.*" >/dev/null 2>&1; then
+    local RELAYBAK
+    RELAYBAK="${RELAYCONF}.bak.$(date +%s)"
+    run sudo cp "$RELAYCONF" "$RELAYBAK"
+    record_backup "$RELAYCONF" "$RELAYBAK"
+  fi
+  if [ -f "$TORSYSTEMD" ] && ! compgen -G "${TORSYSTEMD}.bak.*" >/dev/null 2>&1; then
+    local UNITBAK
+    UNITBAK="${TORSYSTEMD}.bak.$(date +%s)"
+    run sudo cp "$TORSYSTEMD" "$UNITBAK"
+    record_backup "$TORSYSTEMD" "$UNITBAK"
+  fi
+  configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT"
 run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
   run sudo tee "$TORSYSTEMD" >/dev/null <<EOF
 [Unit]
@@ -633,7 +681,12 @@ warn "apt updates slow. Revert iptables: sudo iptables -t nat -F OUTPUT"
 
 configure_tor_transparent_proxy() {
 local TORRC="/etc/tor/torrc"
-run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+if [ -f "$TORRC" ]; then
+  local TORBAK
+  TORBAK="${TORRC}.bak.$(date +%s)"
+  run sudo cp "$TORRC" "$TORBAK"
+  record_backup "$TORRC" "$TORBAK"
+fi
 run sudo tee "$TORRC" >/dev/null <<'EOF'
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
@@ -754,10 +807,9 @@ disable_ipv6() {
     run sudo cp /etc/sysctl.conf /var/backups/sysctl.conf.bak
     record_backup /etc/sysctl.conf /var/backups/sysctl.conf.bak
   fi
-  # Ensure sysctl.conf ends in a newline, then append. The '$a\' form forces
-  # a leading newline before the new content so the first appended line
-  # cannot be glued to the previous one.
-  run sudo bash -c 'tail -c1 /etc/sysctl.conf | od -An -c | grep -q "\\n" || printf "\n" >> /etc/sysctl.conf'
+  # Ensure sysctl.conf ends in a newline, then append. If the last byte is
+  # already \n, the shell's >> append starts a fresh line automatically.
+  run sudo bash -c 'last=$(tail -c1 /etc/sysctl.conf); [ "$last" != "" ] && [ "$last" != $'"'"'\n'"'"' ] && printf "\n" >> /etc/sysctl.conf'
   run sudo tee -a /etc/sysctl.conf >/dev/null <<'EOF'
 
 # disabled by ubuntuinstall.sh
@@ -765,6 +817,18 @@ net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 EOF
   warn "Reboot may be required for full effect."
+}
+
+# Helper: set a directive in sshd_config to a value, or append it if absent.
+# Looks in the main file AND the drop-ins so a directive that was set via
+# /etc/ssh/sshd_config.d/*.conf is correctly rewritten.
+_set_or_append_sshd_config() {
+  local param="$1" value="$2" cfg="$3"
+  if grep -qE "^#?${param}" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+    run sudo sed -i "s/^#\?${param}.*/${param} ${value}/" "$cfg"
+  else
+    printf '%s %s\n' "$param" "$value" | run sudo tee -a "$cfg" >/dev/null
+  fi
 }
 
 backup_and_report_authorized_keys() {
@@ -835,7 +899,7 @@ setup_authorized_keys_with_validation() {
   fi
 
   if ! grep -qF "$(sudo -u "$target_user" cat "$recovery_key.pub" 2>/dev/null)" "$target_ak" 2>/dev/null; then
-    sudo -u "$target_user" bash -c "cat '$recovery_key.pub' >> '$target_ak'"
+    sudo -u "$target_user" tee -a "$target_ak" >/dev/null < "$recovery_key.pub"
   fi
 
   if [ ! -t 0 ]; then
@@ -908,14 +972,30 @@ harden_ssh() {
   record_backup "$SSHCFG" "$BACKUP"
 
   if prompt_yn "Set PermitRootLogin no?" "y"; then
-    run sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHCFG"
+    if grep -qE '^PermitRootLogin' "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+      run sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHCFG"
+    else
+      run sudo tee -a "$SSHCFG" >/dev/null <<'SSHEOF'
+PermitRootLogin no
+SSHEOF
+    fi
     metrics_add services_hardened 1
   fi
 
   if prompt_yn "Reduce LoginGraceTime to 30s and MaxAuthTries to 3?" "y"; then
-    run sudo sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 30s/' "$SSHCFG"
-    run sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' "$SSHCFG"
-    run sudo sed -i 's/^#\?MaxSessions.*/MaxSessions 2/' "$SSHCFG"
+    for param in LoginGraceTime MaxAuthTries MaxSessions; do
+      if grep -qE "^${param}" "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+        case "$param" in
+          LoginGraceTime) run sudo sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 30s/' "$SSHCFG" ;;
+          MaxAuthTries)  run sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' "$SSHCFG" ;;
+          MaxSessions)    run sudo sed -i 's/^#\?MaxSessions.*/MaxSessions 2/' "$SSHCFG" ;;
+        esac
+      else
+        printf '%s %s\n' "$param" \
+          "$(case "$param" in LoginGraceTime) echo "30s";; MaxAuthTries) echo "3";; MaxSessions) echo "2";; esac)" \
+          | run sudo tee -a "$SSHCFG" >/dev/null
+      fi
+    done
     metrics_add services_hardened 1
   fi
 
@@ -924,7 +1004,13 @@ harden_ssh() {
     printf "\033[1;31m[!] SSH port change — losing connection?\033[0m  Reconnect with:\n"
     printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
     read -r -p "Press Enter to continue, or Ctrl-C to abort... " _
-    run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
+    if grep -qE '^Port' "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+      run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
+    else
+      run sudo tee -a "$SSHCFG" >/dev/null <<'SSHEOF'
+Port 2222
+SSHEOF
+    fi
     run sudo ufw allow 2222/tcp
     metrics_add fw_rules_added 1
   fi
@@ -941,11 +1027,11 @@ harden_ssh() {
       if ! setup_authorized_keys_with_validation; then
         err "No working pubkey validated. Leaving PasswordAuthentication unchanged."
         if prompt_yn "Re-enable PasswordAuthentication explicitly (yes)?" "y"; then
-          run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHCFG"
+          _set_or_append_sshd_config "PasswordAuthentication" "yes" "$SSHCFG"
         fi
       else
         ok "Pubkey validated. Disabling password auth."
-        run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+        _set_or_append_sshd_config "PasswordAuthentication" "no" "$SSHCFG"
         metrics_add services_hardened 1
         metrics_add auth_keys_added 1
       fi
@@ -957,14 +1043,19 @@ harden_ssh() {
       if ! prompt_yn "Disable PasswordAuthentication? (type 'yes' to confirm)" "no"; then
         warn "Leaving PasswordAuthentication unchanged."
       else
-        run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+        _set_or_append_sshd_config "PasswordAuthentication" "no" "$SSHCFG"
         metrics_add services_hardened 1
       fi
     fi
   fi
 
-  if ! sudo sshd -t -f "$SSHCFG"; then
-    err "sshd config is INVALID - reverting backup and NOT restarting."
+  # Validate using sshd -t with the REAL config (not -f, which excludes
+  # /etc/ssh/sshd_config.d/*.conf drop-ins). Capture stderr so we can
+  # show the user the actual error.
+  local sshd_check_err
+  if ! sshd_check_err="$(sudo sshd -t 2>&1)"; then
+    err "sshd config is INVALID: $sshd_check_err"
+    err "Reverting backup and NOT restarting."
     run sudo cp -f "$BACKUP" "$SSHCFG"
     return 1
   fi

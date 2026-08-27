@@ -665,9 +665,11 @@ setup_dnscrypt() {
 
 setup_firewall() {
   msg "Firewall (UFW)"
-  if sudo ufw status | grep -q '^Status: active'; then
+  local ufw_status
+  ufw_status="$(sudo ufw status 2>/dev/null)" || true
+  if echo "$ufw_status" | grep -q '^Status: active'; then
     ok "UFW is already active - skipping enable."
-    sudo ufw status verbose
+    echo "$ufw_status" | sudo ufw status verbose
     return 0
   fi
   _warn_if_not_tmux
@@ -1107,6 +1109,12 @@ setup_authorized_keys_with_validation() {
   [ -n "$target_home" ] || target_home="/root"
   target_ak="$target_home/.ssh/authorized_keys"
 
+  if [ ! -t 0 ]; then
+    err "stdin is not a TTY - cannot paste a public key safely."
+    info "Re-run this script interactively (terminal attached) to set up a key."
+    return 1
+  fi
+
   msg "Setting up authorized_keys for user: $target_user (home: $target_home)"
 
   sudo -u "$target_user" mkdir -p "$target_home/.ssh"
@@ -1136,12 +1144,6 @@ setup_authorized_keys_with_validation() {
 
   if ! grep -qF "$(sudo -u "$target_user" cat "$recovery_key.pub" 2>/dev/null)" "$target_ak" 2>/dev/null; then
     sudo -u "$target_user" tee -a "$target_ak" >/dev/null < "$recovery_key.pub"
-  fi
-
-  if [ ! -t 0 ]; then
-    err "stdin is not a TTY - cannot paste a public key safely."
-    info "Re-run this script interactively (terminal attached) to set up a key."
-    return 1
   fi
 
   printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
@@ -1409,7 +1411,8 @@ harden_passwords() {
     run sudo cp /etc/security/pwquality.conf /var/backups/pwquality.conf.bak
     record_backup /etc/security/pwquality.conf /var/backups/pwquality.conf.bak
   fi
-  declare -A pwq_vals=( [minlen]=14 [minclass]=3 [maxrepeat]=3 )
+  local -A pwq_vals=( [minlen]=14 [minclass]=3 [maxrepeat]=3 )
+  local kw
   for kw in "${!pwq_vals[@]}"; do
     grep -q "^${kw}[[:space:]]*=" /etc/security/pwquality.conf 2>/dev/null || \
       echo "${kw} = ${pwq_vals[${kw}]}" | sudo tee -a /etc/security/pwquality.conf >/dev/null

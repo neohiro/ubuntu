@@ -301,6 +301,113 @@ disable_ipv6() {
   warn "Reboot may be required for full effect."
 }
 
+backup_and_report_authorized_keys() {
+  local bakdir="/var/backups/ubuntu-install-ssh"
+  run sudo mkdir -p "$bakdir"
+  local f count
+  for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+    [ -f "$f" ] || continue
+    count=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null || echo 0)
+    [ "$count" -eq 0 ] && continue
+    run sudo cp -a "$f" "$bakdir/$(echo "$f" | tr '/' '_').bak.$(date +%s)"
+    info "Preserved $f ($count keys) -> $bakdir/$(basename "$f").bak.*"
+  done
+}
+
+audit_authorized_keys() {
+  msg "Audit of existing SSH keys (before any changes)"
+  local f count total=0
+  for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+    [ -f "$f" ] || { info "  (none)  $f"; continue; }
+    count=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null || echo 0)
+    info "  $count key(s) in $f"
+    total=$((total + count))
+    grep -E '^(ssh-|ecdsa-)' "$f" 2>/dev/null | while IFS= read -r k; do
+      printf "    %s  %s\n" "$(echo "$k" | awk '{print $1, $2}' | head -c 50)..." "$(echo "$k" | awk '{print $NF}')"
+    done
+  done
+  info "Total keys across all authorized_keys files: $total"
+  printf "  Current sshd_config PasswordAuthentication: "
+  grep -E '^#?\s*PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | head -3
+}
+
+setup_authorized_keys_with_validation() {
+  local target_user target_home target_ak
+  target_user="${SUDO_USER:-$USER}"
+  if [ -z "$target_user" ] || [ "$target_user" = "root" ]; then
+    target_user="$(logname 2>/dev/null || whoami)"
+  fi
+  target_home="$(getent passwd "$target_user" 2>/dev/null | cut -d: -f6)"
+  [ -n "$target_home" ] || target_home="/root"
+  target_ak="$target_home/.ssh/authorized_keys"
+
+  msg "Setting up authorized_keys for user: $target_user (home: $target_home)"
+
+  sudo -u "$target_user" mkdir -p "$target_home/.ssh"
+  sudo -u "$target_user" chmod 700 "$target_home/.ssh"
+  sudo -u "$target_user" touch "$target_ak"
+  sudo -u "$target_user" chmod 600 "$target_ak"
+
+  local recovery_key="$target_home/.ssh/id_ed25519_recovery"
+  if [ ! -f "$recovery_key" ]; then
+    info "Generating a server-side recovery key (ed25519) at $recovery_key"
+    if ! sudo -u "$target_user" ssh-keygen -t ed25519 -N "" -f "$recovery_key" -C "ubuntu-install-recovery@$(hostname)" 2>/dev/null; then
+      err "Could not generate recovery key."
+    else
+      printf "\n\033[1;33m[!] EMERGENCY RECOVERY KEY\033[0m (printed in case you get locked out):\n"
+      printf "  Private: %s\n  Public:\n" "$recovery_key"
+      cat "$recovery_key.pub"
+      printf "  Save the PRIVATE key to your laptop NOW.\n\n"
+    fi
+  fi
+
+  if ! grep -qF "$(cat "$recovery_key.pub" 2>/dev/null)" "$target_ak" 2>/dev/null; then
+    sudo -u "$target_user" bash -c "cat '$recovery_key.pub' >> '$target_ak'"
+  fi
+
+  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+  printf "\033[1;33m│  PASTE YOUR LAPTOP'S PUBLIC SSH KEY BELOW.\033[0m\n"
+  printf "\033[1;33m│  Format: ssh-ed25519 AAAA... user@host  OR  ssh-rsa AAAA... user@host\033[0m\n"
+  printf "\033[1;33m│  Press Enter on an empty line when done, or type 'skip' to abort.\033[0m\n"
+  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+  printf "> "
+
+  local pasted_key="" line
+  while IFS= read -r line; do
+    [ -z "$line" ] && break
+    if [ "$line" = "skip" ]; then pasted_key=""; break; fi
+    pasted_key="$line"
+    break
+  done
+
+  if [ -z "$pasted_key" ]; then
+    err "No public key pasted."
+    return 1
+  fi
+
+  if ! echo "$pasted_key" | grep -qE '^(ssh-(ed25519|rsa|dss|ecdsa)|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+( .+)?$'; then
+    err "Pasted value does not look like a valid SSH public key."
+    return 1
+  fi
+
+  if grep -qF "$pasted_key" "$target_ak"; then
+    ok "Public key already in authorized_keys."
+  else
+    echo "$pasted_key" | sudo -u "$target_user" tee -a "$target_ak" >/dev/null
+    sudo -u "$target_user" chmod 600 "$target_ak"
+    ok "Public key added to $target_ak"
+  fi
+
+  if [ -t 0 ]; then
+    if ! prompt_yn "Have you VERIFIED that this public key works (e.g., you can SSH from your laptop with it)?" "n"; then
+      warn "Skipping PasswordAuthentication change - pubkey not confirmed working."
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 harden_ssh() {
   if [ "$USE_REMOTE_SSH" != "yes" ]; then
     info "Skipping SSH hardening (you said you don't use remote SSH)."
@@ -313,6 +420,9 @@ harden_ssh() {
       err "openssh-server install failed; cannot proceed with SSH hardening."; return 1
     fi
   fi
+
+  backup_and_report_authorized_keys
+  audit_authorized_keys
 
   local SSHCFG="/etc/ssh/sshd_config"
   local BACKUP="${SSHCFG}.bak.$(date +%s)"
@@ -340,16 +450,33 @@ harden_ssh() {
   if prompt_yn "Disable password authentication (PubKey only)? THIS CAN LOCK YOU OUT" "n"; then
     local keyfile="/root/.ssh/authorized_keys"
     [ -s "$keyfile" ] || keyfile="$HOME/.ssh/authorized_keys"
-    if [ ! -s "$keyfile" ]; then
-      err "No authorized_keys found at $keyfile or /root/.ssh/authorized_keys."
-      if ! prompt_yn "I have added a public key - proceed anyway? (type yes)" "no"; then
-        warn "Skipping PasswordAuthentication change to avoid lockout."
+    local ak_count=0
+    for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+      [ -f "$f" ] || continue
+      c=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null) || c=0
+      ak_count=$((ak_count + c))
+    done
+    if [ "$ak_count" -eq 0 ]; then
+      warn "No public keys found in any authorized_keys. Helping you set one up safely."
+      if ! setup_authorized_keys_with_validation; then
+        err "No working pubkey validated. Leaving PasswordAuthentication unchanged."
+        if prompt_yn "Re-enable PasswordAuthentication explicitly (yes)?" "y"; then
+          run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHCFG"
+        fi
       else
+        ok "Pubkey validated. Disabling password auth."
         run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
       fi
     else
-      ok "Pubkey found - disabling password auth."
-      run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+      printf "\033[1;33m│  Confirm your pubkey is one of the $ak_count listed above.         \033[0m\n"
+      printf "\033[1;33m│  If you are NOT sure, type 'no' to keep password auth enabled.     \033[0m\n"
+      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+      if ! prompt_yn "Disable PasswordAuthentication? (type 'yes' to confirm)" "no"; then
+        warn "Leaving PasswordAuthentication unchanged."
+      else
+        run sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHCFG"
+      fi
     fi
   fi
 

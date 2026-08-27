@@ -306,81 +306,117 @@ setup_tor() {
   ok "Tor daemon installed."
 }
 
-configure_tor_combined() {
-  msg "Combined: transparent proxy + relay (single Tor instance, two roles)"
-  local NICK OR_PORT DIR_PORT CONTACT ROLE
-  prompt_choice "Pick a relay role to run alongside the transparent proxy" \
-    "Middle relay (default, recommended for first-time)" \
-    "Exit relay (only on a server you own and trust - legal implications)" \
-    "Bridge relay (helps censored users)"
-  ROLE=$REPLY_CHOICE
-  case "$ROLE" in
-    0) OR_PORT="9001"; DIR_PORT="9030";;
-    1) OR_PORT="443";   DIR_PORT="80";  warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
-    2) OR_PORT="9001";  DIR_PORT="9030";;
-  esac
-  NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
-  CONTACT="${TOR_CONTACT:-you@example.com}"
+configure_tor_combined_apply() {
+local CONF="$1" ROLE="$2" OR_PORT="$3" DIR_PORT="$4" NICK="$5" CONTACT="$6"
+local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
+local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
+local RELAYDIR="/var/lib/tor-relay" RELAYLOG="/var/log/tor/relay-notices.log"
+run sudo mkdir -p "$RELAYDIR" "/var/log/tor"
+run sudo tee "$CONF" >/dev/null <<CONFEOF
+ORPort $OR_PORT
+DirPort $DIR_PORT
+Nickname $NICK
+ContactInfo $CONTACT
+DataDirectory $RELAYDIR
+Log notice file $RELAYLOG
 
-  local TORRC="/etc/tor/torrc"
-  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
-  run sudo tee "$TORRC" >/dev/null <<EOF
+BandwidthRate ${BW_RATE} MBytes
+BandwidthBurst ${BW_BURST} MBytes
+AccountingMax $ACCT_MAX
+AccountingStart day 1 00:00
+
+AvoidDiskWrites 1
+DisableAllSwap 1
+DisableDebuggerAttachment 1
+CloseUnknownConnection 1
+
+ConnLimit 512
+MaxCircuitDirtiness 10 minutes
+NumEntryGuards 6
+SafeLogging 1
+
+CONFEOF
+case "$ROLE" in
+  0) run sudo tee -a "$CONF" >/dev/null <<'EXITEOF'
+ExitPolicy reject *:*
+EXITEOF
+    ;;
+  1) run sudo tee -a "$CONF" >/dev/null <<'EXITEOF'
+ExitPolicy accept *:25
+ExitPolicy accept *:587
+ExitPolicy accept *:465
+ExitPolicy accept *:993
+ExitPolicy accept *:995
+ExitPolicy accept *:143
+ExitPolicy accept *:110
+ExitPolicy accept *:443
+ExitPolicy accept *:80
+ExitPolicy accept *:53
+ExitPolicy accept *:22
+ExitPolicy accept *:1-19,20-52,54-79,81-442,444-1023,1025-65535
+ExitPolicy reject *:*
+EXITEOF
+    warn "Exit relay: only listed ports are allowed outbound. Check local laws."
+    ;;
+  2) run sudo tee -a "$CONF" >/dev/null <<'EXITEOF'
+ExitPolicy reject *:*
+BridgeRelay 1
+ServerTransportListenAddr 0.0.0.0:$OR_PORT
+ExtORPort auto
+EXITEOF
+    ;;
+esac
+}
+
+configure_tor_combined() {
+msg "Combined: transparent proxy + relay (single host, two tor processes)"
+local NICK OR_PORT DIR_PORT CONTACT ROLE
+local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
+local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
+prompt_choice "Pick a relay role to run alongside the transparent proxy" \
+  "Middle relay (default, recommended for first-time)" \
+  "Exit relay (only on a server you own and trust - legal implications)" \
+  "Bridge relay (helps censored users)"
+ROLE=$REPLY_CHOICE
+case "$ROLE" in
+  0) OR_PORT="9001"; DIR_PORT="9030";;
+  1) OR_PORT="443";   DIR_PORT="80";  warn "Exit relay exposes your IP for other users' traffic.";;
+  2) OR_PORT="9001";  DIR_PORT="9030";;
+esac
+NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
+CONTACT="${TOR_CONTACT:-you@example.com}"
+
+local RELAYCONF="/etc/tor/torrc.relay"
+local TORSYSTEMD="/etc/systemd/system/tor-relay.service"
+
+msg "Configuring primary tor (transparent proxy role)"
+local TORRC="/etc/tor/torrc"
+run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+run sudo tee "$TORRC" >/dev/null <<'EOF'
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 AutomapHostsSuffixes .onion,.exit
 TransPort 127.0.0.1:9040 IsolateClientAddr IsolateClientProtocol IsolateDestAddr IsolateDestPort
 DNSPort 127.0.0.2:53
 Log notice file /var/log/tor/notices.log
-
-ORPort $OR_PORT NoListen
-DirPort $DIR_PORT NoListen
-Nickname $NICK
-ContactInfo $CONTACT
+ORPort 0
+DirPort 0
 EOF
-  if [ "$ROLE" -eq 0 ]; then
-    run sudo tee -a "$TORRC" >/dev/null <<'EOF'
+_warn_if_not_tmux
+run sudo systemctl restart tor
+if ! sudo systemctl is-active --quiet tor; then
+  err "Primary tor failed - restoring torrc and aborting combined setup."
+  run sudo cp -f "${TORRC}.bak."* "$TORRC"
+  return 1
+fi
+ok "Primary tor (transparent proxy) active."
 
-ExitPolicy reject *:*
-EOF
-  elif [ "$ROLE" -eq 1 ]; then
-    run sudo tee -a "$TORRC" >/dev/null <<'EOF'
-
-ExitPolicy accept *:*
-EOF
-  fi
-
-  _warn_if_not_tmux
-  run sudo systemctl restart tor
-  if ! sudo systemctl is-active --quiet tor; then
-    err "tor failed to start - check: sudo journalctl -u tor --no-pager | tail -30"
-    run sudo cp -f "${TORRC}.bak."* "$TORRC" 2>/dev/null
-    return 1
-  fi
-
-  msg "Now configuring relay sockets in a separate tor instance (transparent proxy stays on 9040/9053)"
-  local RELAYDIR="/var/lib/tor-relay"
-  local RELAYCONF="/etc/tor/torrc.relay"
-  run sudo mkdir -p "$RELAYDIR"
-  run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
-  run sudo tee "$RELAYCONF" >/dev/null <<EOF
-ORPort $OR_PORT
-DirPort $DIR_PORT
-Nickname $NICK
-ContactInfo $CONTACT
-DataDirectory $RELAYDIR
-Log notice file /var/log/tor/relay-notices.log
-EOF
-  if [ "$ROLE" -eq 0 ]; then
-    run sudo bash -c "echo 'ExitPolicy reject *:*' >> '$RELAYCONF'"
-  elif [ "$ROLE" -eq 1 ]; then
-    run sudo bash -c "echo 'ExitPolicy accept *:*' >> '$RELAYCONF'"
-  fi
-  run sudo ufw allow "$OR_PORT"/tcp
-  run sudo ufw allow "$DIR_PORT"/tcp
-
-  run sudo tee /etc/systemd/system/tor-relay.service >/dev/null <<EOF
+msg "Configuring relay companion ($ROLE)"
+configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT"
+run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
+run sudo tee "$TORSYSTEMD" >/dev/null <<EOF
 [Unit]
-Description=Tor relay instance (companion to local transparent proxy)
+Description=Tor relay (companion to local transparent proxy)
 After=network.target tor.service
 Wants=tor.service
 
@@ -395,42 +431,48 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-  run sudo systemctl daemon-reload
-  run sudo systemctl enable --now tor-relay.service
-  if ! sudo systemctl is-active --quiet tor-relay.service; then
-    err "tor-relay service failed - check: sudo journalctl -u tor-relay --no-pager | tail -30"
-  else
-    ok "tor-relay service is active on $OR_PORT/$DIR_PORT."
-  fi
+run sudo systemctl daemon-reload
+run sudo systemctl enable --now tor-relay.service
+if ! sudo systemctl is-active --quiet tor-relay.service; then
+  err "tor-relay failed - check: sudo journalctl -u tor-relay --no-pager | tail -30"
+else
+  ok "tor-relay active on ORPort=$OR_PORT DirPort=$DIR_PORT."
+fi
 
-  _warn_if_not_tmux
-  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
-  local cmds=(
-    "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
-    "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p tcp --dport $OR_PORT -j RETURN"
-    "iptables -t nat -A OUTPUT -p tcp --dport $DIR_PORT -j RETURN"
-  )
-  for c in "${cmds[@]}"; do
-    run sudo $c
-  done
-  run sudo netfilter-persistent save
-  ok "Transparent proxy + relay active together."
-  info "Verify exit: curl --max-time 10 https://check.torproject.org/api/ip"
-  info "Verify relay: https://metrics.torproject.org/rs.html (search nickname: $NICK)"
-  warn "apt updates will be slow. Revert: sudo iptables -t nat -F OUTPUT"
+run sudo ufw allow "$OR_PORT"/tcp
+run sudo ufw allow "$DIR_PORT"/tcp
+
+_warn_if_not_tmux
+run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+local cmds=(
+  "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
+  "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p tcp --dport $OR_PORT -j RETURN"
+  "iptables -t nat -A OUTPUT -p tcp --dport $DIR_PORT -j RETURN"
+)
+for c in "${cmds[@]}"; do
+  run sudo $c
+done
+run sudo netfilter-persistent save
+
+ok "Transparent proxy + $ROLE active. Bandwidth capped at ${BW_RATE} MB/s sustained, ${BW_BURST} MB/s burst."
+info "Monthly accounting limit: $ACCT_MAX"
+info "Verify exit:   curl --max-time 10 https://check.torproject.org/api/ip"
+info "Verify relay:  https://metrics.torproject.org/rs.html (search: $NICK)"
+info "Bridge (if bridge role):  provide this line to users: $(grep -E '^Bridge ' "$RELAYCONF" 2>/dev/null || echo 'not yet published')"
+warn "apt updates slow. Revert iptables: sudo iptables -t nat -F OUTPUT"
 }
 
 configure_tor_transparent_proxy() {
-  local TORRC="/etc/tor/torrc"
-  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
-  run sudo tee "$TORRC" >/dev/null <<'EOF'
+local TORRC="/etc/tor/torrc"
+run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+run sudo tee "$TORRC" >/dev/null <<'EOF'
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 127.0.0.1:9040 IsolateClientAddr IsolateClientProtocol IsolateDestAddr IsolateDestPort
@@ -438,59 +480,99 @@ DNSPort 127.0.0.2:53
 AutomapHostsSuffixes .onion,.exit
 Log notice file /var/log/tor/notices.log
 EOF
-  _warn_if_not_tmux
-  run sudo systemctl restart tor
-  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
-  local cmds=(
-    "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
-    "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
-    "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
-    "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
-  )
-  for c in "${cmds[@]}"; do
-    run sudo $c
-  done
-  run sudo netfilter-persistent save
-  ok "Tor transparent proxy active. Verify: curl --max-time 10 https://check.torproject.org/api/ip"
-  warn "apt updates will be much slower; consider 'sudo iptables -t nat -F OUTPUT' to revert."
+_warn_if_not_tmux
+run sudo systemctl restart tor
+run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+local cmds=(
+  "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
+  "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
+  "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
+  "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
+)
+for c in "${cmds[@]}"; do
+  run sudo $c
+done
+run sudo netfilter-persistent save
+ok "Tor transparent proxy active. Verify: curl --max-time 10 https://check.torproject.org/api/ip"
+warn "apt updates will be much slower; consider 'sudo iptables -t nat -F OUTPUT' to revert."
 }
 
 configure_tor_relay() {
-  local NICK OR_PORT DIR_PORT CONTACT
-  prompt_choice "Pick a relay role" "Middle relay (default, recommended for first-time)" "Exit relay (only on a server you own and trust)" "Bridge relay (helps censored users)"
-  case "$REPLY_CHOICE" in
-    0) OR_PORT="auto"; DIR_PORT="auto";;
-    1) OR_PORT="443"; DIR_PORT="80"; warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
-    2) OR_PORT="auto"; DIR_PORT="auto";;
-  esac
-  NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
-  CONTACT="${TOR_CONTACT:-you@example.com}"
+local NICK OR_PORT DIR_PORT CONTACT ROLE
+local BW_RATE="${TOR_BANDWIDTH_RATE:-10}"
+local BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
+local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
+prompt_choice "Pick a relay role" "Middle relay (default, recommended for first-time)" "Exit relay (only on a server you own and trust)" "Bridge relay (helps censored users)"
+ROLE=$REPLY_CHOICE
+case "$ROLE" in
+  0) OR_PORT="auto"; DIR_PORT="auto";;
+  1) OR_PORT="443";   DIR_PORT="80";   warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
+  2) OR_PORT="auto";  DIR_PORT="auto";;
+esac
+NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
+CONTACT="${TOR_CONTACT:-you@example.com}"
 
-  local TORRC="/etc/tor/torrc"
-  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
-  run sudo tee "$TORRC" >/dev/null <<EOF
+local TORRC="/etc/tor/torrc"
+run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+run sudo tee "$TORRC" >/dev/null <<EOF
 ORPort $OR_PORT
 DirPort $DIR_PORT
-ExitPolicy reject *:*
 Nickname $NICK
 ContactInfo $CONTACT
 Log notice file /var/log/tor/notices.log
+
+BandwidthRate ${BW_RATE} MBytes
+BandwidthBurst ${BW_BURST} MBytes
+AccountingMax $ACCT_MAX
+AccountingStart day 1 00:00
+
+AvoidDiskWrites 1
+DisableAllSwap 1
+DisableDebuggerAttachment 1
+CloseUnknownConnection 1
+SafeLogging 1
+
 EOF
-  _warn_if_not_tmux
-  if [ "$REPLY_CHOICE" -eq 0 ] || [ "$REPLY_CHOICE" -eq 2 ]; then
-    run sudo sed -i 's/^ExitPolicy reject \*:\*/ExitPolicy reject \*:\*/' "$TORRC"
-  else
-    run sudo sed -i 's/^ExitPolicy reject \*:\*/ExitPolicy accept \*:\*/' "$TORRC"
-  fi
-  run sudo ufw allow "$OR_PORT"/tcp 2>/dev/null || true
-  run sudo ufw allow "$DIR_PORT"/tcp 2>/dev/null || true
-  run sudo systemctl restart tor
-  ok "Tor relay starting. Check reachability at https://metrics.torproject.org/rs.html (search your nickname)."
-  info "First sync with other relays can take 20-60 minutes."
+case "$ROLE" in
+  0)
+    run sudo tee -a "$TORRC" >/dev/null <<'EXITEOF'
+ExitPolicy reject *:*
+ConnLimit 512
+MaxCircuitDirtiness 10 minutes
+NumEntryGuards 6
+EXITEOF
+    ;;
+  1)
+    warn "Exit relay: listing common safe ports. Check local laws before running."
+    run sudo tee -a "$TORRC" >/dev/null <<'EXITEOF'
+ExitPolicy accept *:25,465,587,993,995,143,110,443,80,53,22
+ExitPolicy reject *:*
+EXITEOF
+    ;;
+  2)
+    run sudo tee -a "$TORRC" >/dev/null <<'EXITEOF'
+ExitPolicy reject *:*
+BridgeRelay 1
+ExtORPort auto
+EXITEOF
+    ;;
+esac
+_warn_if_not_tmux
+run sudo ufw allow "$OR_PORT"/tcp 2>/dev/null || true
+run sudo ufw allow "$DIR_PORT"/tcp 2>/dev/null || true
+run sudo systemctl restart tor
+if ! sudo systemctl is-active --quiet tor; then
+  err "tor failed - restoring torrc."
+  run sudo cp -f "${TORRC}.bak."* "$TORRC" 2>/dev/null
+  return 1
+fi
+ok "Tor relay starting on ORPort=$OR_PORT DirPort=$DIR_PORT. Bandwidth: ${BW_RATE} MB/s, accounting: $ACCT_MAX"
+info "Check reachability at https://metrics.torproject.org/rs.html (search your nickname)."
+info "First sync with other relays can take 20-60 minutes."
 }
 
 disable_ipv6() {

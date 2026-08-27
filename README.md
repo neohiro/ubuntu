@@ -20,6 +20,14 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 
 **Progress checklist:** the script prints a colored bar chart (e.g. `━━━ PROGRESS ████████████░░░░ 12/17 (70%) ━━━`) before every step, so you always see what's already done and what's coming.
 
+**Optional GPG signature verification** of fetched sub-scripts (disabled by default):
+```bash
+# Verify all fetched *.sh files against a detached .asc, fail if bad
+sudo NEOSIGN_GPG_LEVEL=required NEOSIGN_GPG_FPR=<40-hex-fpr> \
+     bash ubuntuinstall.sh
+```
+The signature check uses your local gpg pubring; the signer's public key must already be trusted (imported once via `gpg --import`). Without a fingerprint pin, only the cryptographic check is performed.
+
 ### Run summary and rollback
 
 At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:

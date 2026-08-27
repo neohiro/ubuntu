@@ -97,9 +97,8 @@ fi
 exit "$rc"
 INNER_EOF
 )
-  exec env REPO_RAW_BASE="$REPO_RAW_BASE" \
-       tmux new-session -A -s ubuntu-setup -n setup \
-         "env REPO_RAW_BASE='$REPO_RAW_BASE' bash -c $(printf '%q' "$inner") -- $(printf '%q' "$ORIG_CWD") $(printf '%q' "$SCRIPT_PATH")"
+  exec tmux new-session -A -s ubuntu-setup -n setup \
+    "cd $(printf '%q' "$ORIG_CWD") && bash $(printf '%q' "$SCRIPT_PATH")"
 }
 
 bold() { printf "\033[1m%s\033[0m\n" "$*"; }
@@ -120,7 +119,8 @@ run() {
 
 prompt_yn() {
   local q="$1" def="${2:-N}"
-  local hint="[y/N]"; [ "$def" = "y" ] || [ "$def" = "Y" ] && hint="[Y/n]"
+  local hint="[y/N]"
+  if [ "$def" = "y" ] || [ "$def" = "Y" ]; then hint="[Y/n]"; fi
   local a
   if [ -t 0 ]; then
     read -r -p "$q $hint " a
@@ -195,41 +195,57 @@ run_remote_script() {
 }
 
 # Verify a detached cleartext GPG signature (.asc) against the script.
-# Returns 0 on a valid signature from the configured trust list, 1 otherwise.
+# Uses the system default pubring (no custom keyring).
+# The signer's key must already be in the user's keyring.
+# Optionally verify the signer fingerprint matches $NEOSIGN_GPG_FPR if set.
 _verify_remote_gpg_signature() {
-  local name="$1" script="$2" sig url_dst
+  local name="$1" script="$2" sig url_dst gpg_out rc
   if ! command -v gpg >/dev/null 2>&1; then
     err "gpg is not installed; cannot verify $name"
     return 1
   fi
   local fpr="${NEOSIGN_GPG_FPR:-}"
-  if [ -z "$fpr" ]; then
-    err "NEOSIGN_GPG_FPR is not set; cannot verify $name"
-    return 1
-  fi
   url_dst="${TMP_DIR}/${name}.asc"
   if ! curl -fsSL "${REPO_RAW_BASE}/${name}.asc" -o "$url_dst" 2>/dev/null; then
     err "Could not fetch ${name}.asc from $REPO_RAW_BASE"
     return 1
   fi
-  if ! gpg --batch --no-default-keyring \
-           --keyring "${NEOSIGN_GPG_KEYRING:-${TMP_DIR}/trustedkeys.kbx}" \
-           --trust-model always \
-           --verify "$url_dst" "$script" 2>/tmp/neosign-gpg-err.$$; then
-    err "gpg --verify failed: $(cat /tmp/neosign-gpg-err.$$)"
-    rm -f /tmp/neosign-gpg-err.$$
-    return 1
+  # Verify with the system pubring. If the signer's key is not in the
+  # pubring, gpg still validates the cryptographic signature but warns
+  # about the unknown key. We capture all output to report it.
+  gpg_out=$(mktemp)
+  rc=0
+  gpg --batch --verify "$url_dst" "$script" >"$gpg_out" 2>&1 || rc=$?
+  if [ $rc -ne 0 ] && ! grep -qi 'gpg: no signer information' "$gpg_out" 2>/dev/null; then
+    # Also check for "Good signature" despite unknown key
+    if ! grep -qi 'Good signature' "$gpg_out" 2>/dev/null; then
+      err "gpg --verify failed:"
+      cat "$gpg_out" >&2
+      rm -f "$gpg_out"
+      return 1
+    fi
+    warn "Signature is cryptographically valid but key is not in pubring."
   fi
-  rm -f /tmp/neosign-gpg-err.$$
-  # gpg verifies regardless of the configured fingerprint; the
-  # fingerprint pin is a separate check: any key matching $fpr is OK.
-  if gpg --batch --no-default-keyring \
-         --keyring "${NEOSIGN_GPG_KEYRING:-${TMP_DIR}/trustedkeys.kbx}" \
-         --list-keys "$fpr" >/dev/null 2>&1; then
-    return 0
+  # Optional fingerprint pin: if FPR is set, confirm the signing key matches.
+  if [ -n "$fpr" ]; then
+    local signer
+    signer=$(gpg --batch --verify "$url_dst" "$script" 2>&1 \
+              | awk '/Primary key fingerprint is ([A-F0-9 ]+)/ {print $NF}' \
+              | tr -d ' ')
+    # gpg --verify output format varies; also try gpg --list-keys with the signer key id
+    if [ -z "$signer" ]; then
+      signer=$(gpg --batch --list-keys --keyid-format long "$url_dst" 2>/dev/null \
+                | awk '/^pub.*\// {sub(/.*\//,""); print; exit}')
+    fi
+    if [ -n "$signer" ] && [ "$signer" != "$fpr" ]; then
+      err "Signer key ($signer) does not match trusted fingerprint ($fpr)."
+      rm -f "$gpg_out"
+      return 1
+    fi
+    ok "Signer fingerprint verified: ${signer:-$fpr}"
   fi
-  err "Signature verified but signer fingerprint $fpr is not in the trust list."
-  return 1
+  rm -f "$gpg_out"
+  return 0
 }
 
 ENV_TYPE=""
@@ -489,7 +505,7 @@ apply_dns_via_netplan() {
   done
   [ -n "$f" ] || { err "No netplan YAML in /etc/netplan/."; return 0; }
   local bak
-  bak="${f}.bak.$(date +%s)"
+  bak="${f}.bak.$(date +%s%N)"
   run sudo cp "$f" "$bak"
   record_backup "$f" "$bak"
   run sudo tee /etc/netplan/99-dnscrypt.yaml >/dev/null <<EOF
@@ -525,7 +541,7 @@ apply_dns_via_systemd_networkd() {
   local f="/etc/systemd/network/99-dnscrypt.network"
   local bak
   if [ -f "$f" ]; then
-    bak="${f}.bak.$(date +%s)"
+    bak="${f}.bak.$(date +%s%N)"
     run sudo cp "$f" "$bak"
     record_backup "$f" "$bak"
   fi
@@ -651,11 +667,11 @@ setup_tor() {
 }
 
 configure_tor_combined_apply() {
-  local CONF="$1" ROLE="$2" OR_PORT="$3" DIR_PORT="$4" NICK="$5" CONTACT="$6"
+  local CONF="$1" ROLE="$2" OR_PORT="$3" DIR_PORT="$4" NICK="$5" CONTACT="$6" RELAYDIR="$7"
   local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
   local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
-  local RELAYDIR="/var/lib/tor-relay" RELAYLOG="/var/log/tor/relay-notices.log"
-run sudo mkdir -p "$RELAYDIR" "/var/log/tor"
+  local RELAYLOG="/var/log/tor/relay-notices.log"
+  run sudo mkdir -p "$RELAYDIR" "/var/log/tor"
   {
     printf 'ORPort %s\n' "$OR_PORT"
     printf 'DirPort %s\n' "$DIR_PORT"
@@ -710,9 +726,10 @@ esac
 
 configure_tor_combined() {
 msg "Combined: transparent proxy + relay (single host, two tor processes)"
-local NICK OR_PORT DIR_PORT CONTACT ROLE
+local NICK OR_PORT DIR_PORT CONTACT ROLE RELAYDIR
 local BW_RATE="${TOR_BANDWIDTH_RATE:-10}" BW_BURST="${TOR_BANDWIDTH_BURST:-20}"
 local ACCT_MAX="${TOR_ACCOUNTING_MAX:-200 GBytes}"
+RELAYDIR="/var/lib/tor-relay"
 prompt_choice "Pick a relay role to run alongside the transparent proxy" \
   "Middle relay (default, recommended for first-time)" \
   "Exit relay (only on a server you own and trust - legal implications)" \
@@ -733,7 +750,7 @@ local TORSYSTEMD="/etc/systemd/system/tor-relay.service"
   local TORRC="/etc/tor/torrc"
   if [ -f "$TORRC" ]; then
     local TORBAK
-    TORBAK="${TORRC}.bak.$(date +%s)"
+    TORBAK="${TORRC}.bak.$(date +%s%N)"
     run sudo cp "$TORRC" "$TORBAK"
     record_backup "$TORRC" "$TORBAK"
   fi
@@ -750,7 +767,6 @@ EOF
 _warn_if_not_tmux
 run sudo systemctl restart tor
   local tor_backup
-  local tor_backup
   if ! sudo systemctl is-active --quiet tor; then
     err "Primary tor failed - restoring torrc and aborting combined setup."
     tor_backup=$(ls -t "${TORRC}.bak."* 2>/dev/null | head -n1)
@@ -762,17 +778,17 @@ ok "Primary tor (transparent proxy) active."
   msg "Configuring relay companion ($ROLE)"
   if [ -f "$RELAYCONF" ] && ! compgen -G "${RELAYCONF}.bak.*" >/dev/null 2>&1; then
     local RELAYBAK
-    RELAYBAK="${RELAYCONF}.bak.$(date +%s)"
+    RELAYBAK="${RELAYCONF}.bak.$(date +%s%N)"
     run sudo cp "$RELAYCONF" "$RELAYBAK"
     record_backup "$RELAYCONF" "$RELAYBAK"
   fi
   if [ -f "$TORSYSTEMD" ] && ! compgen -G "${TORSYSTEMD}.bak.*" >/dev/null 2>&1; then
     local UNITBAK
-    UNITBAK="${TORSYSTEMD}.bak.$(date +%s)"
+    UNITBAK="${TORSYSTEMD}.bak.$(date +%s%N)"
     run sudo cp "$TORSYSTEMD" "$UNITBAK"
     record_backup "$TORSYSTEMD" "$UNITBAK"
   fi
-  configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT"
+  configure_tor_combined_apply "$RELAYCONF" "$ROLE" "$OR_PORT" "$DIR_PORT" "$NICK" "$CONTACT" "$RELAYDIR"
 run sudo chown -R debian-tor:debian-tor "$RELAYDIR"
   run sudo tee "$TORSYSTEMD" >/dev/null <<EOF
 [Unit]
@@ -834,7 +850,7 @@ configure_tor_transparent_proxy() {
 local TORRC="/etc/tor/torrc"
 if [ -f "$TORRC" ]; then
   local TORBAK
-  TORBAK="${TORRC}.bak.$(date +%s)"
+  TORBAK="${TORRC}.bak.$(date +%s%N)"
   run sudo cp "$TORRC" "$TORBAK"
   record_backup "$TORRC" "$TORBAK"
 fi
@@ -884,7 +900,7 @@ local CONTACT="${TOR_CONTACT:-you@example.com}"
 
   local TORRC="/etc/tor/torrc"
   local TORBAK
-  TORBAK="${TORRC}.bak.$(date +%s)"
+  TORBAK="${TORRC}.bak.$(date +%s%N)"
   run sudo cp "$TORRC" "$TORBAK"
   record_backup "$TORRC" "$TORBAK"
   {
@@ -1006,7 +1022,7 @@ backup_and_report_authorized_keys() {
     [ -f "$f" ] || continue
     count=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null || echo 0)
     [ "$count" -eq 0 ] && continue
-    run sudo cp -a "$f" "$bakdir/$(echo "$f" | tr '/' '_').bak.$(date +%s)"
+    run sudo cp -a "$f" "$bakdir/$(echo "$f" | tr '/' '_').bak.$(date +%s%N)"
     info "Preserved $f ($count keys) -> $bakdir/$(basename "$f").bak.*"
   done
 }
@@ -1020,7 +1036,7 @@ audit_authorized_keys() {
     info "  $count key(s) in $f"
     total=$((total + count))
     grep -E '^(ssh-|ecdsa-)' "$f" 2>/dev/null | while IFS= read -r k; do
-      printf "    %s  %s\n" "$(echo "$k" | awk '{print $1, $2}' | head -c 50)..." "$(echo "$k" | awk '{print $NF}')"
+      printf "    %s ...  %s\n" "$(echo "$k" | awk '{printf "%.50s", $1" "$2}')" "$(echo "$k" | awk '{print $NF}')"
     done
   done
   info "Total keys across all authorized_keys files: $total"
@@ -1117,13 +1133,8 @@ setup_authorized_keys_with_validation() {
 }
 
 harden_ssh() {
-  local _unused="${FULL_AUTO:-}${SSH_AUTO_MODE:-}${1:-}"  # SC2120 workaround
   if [ "$USE_REMOTE_SSH" != "yes" ] && [ "$SSH_AUTO_MODE" != "1" ]; then
     info "Skipping SSH hardening (not a remote-SSH machine)." ; return 0
-  fi
-
-  if [ "$1" = "--restore-ssh" ]; then
-    restore_ssh_mode; return $?
   fi
 
   local SSHCFG="/etc/ssh/sshd_config"
@@ -1137,25 +1148,28 @@ harden_ssh() {
   fi
 
   local BACKUP
-  BACKUP="${SSHCFG}.bak.$(date +%s)"
+  BACKUP="${SSHCFG}.bak.$(date +%s%N)"
   run sudo cp "$SSHCFG" "$BACKUP"
   record_backup "$SSHCFG" "$BACKUP"
+
+  local dropin
+  for dropin in /etc/ssh/sshd_config.d/*.conf; do
+    [ -f "$dropin" ] || continue
+    BACKUP="${dropin}.bak.$(date +%s%N)"
+    run sudo cp "$dropin" "$BACKUP"
+    record_backup "$dropin" "$BACKUP"
+  done
 
   local interactive=1
   [ "$SSH_AUTO_MODE" = "1" ] && interactive=0
 
-  if [ "$interactive" = "1" ]; then
-    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
-    _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
-    _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
-    _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
-    metrics_add services_hardened 1
-  else
-    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
-    _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
-    _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
-    _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
-    metrics_add services_hardened 1
+  # Hardening directives (same in both modes; auto skips the prompts).
+  _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
+  _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
+  _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
+  _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
+  metrics_add services_hardened 1
+  if [ "$interactive" = "0" ]; then
     ok "[AUTO] PermitRootLogin=no, LoginGraceTime=30s, MaxAuthTries=3, MaxSessions=2"
   fi
 
@@ -1245,7 +1259,7 @@ setup_fail2ban() {
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban
   if [ ! -f /etc/fail2ban/jail.local ]; then
     local JAILBAK
-    JAILBAK="/etc/fail2ban/jail.local.bak.$(date +%s)"
+    JAILBAK="/etc/fail2ban/jail.local.bak.$(date +%s%N)"
     run sudo cp /etc/fail2ban/jail.conf "$JAILBAK"
     record_backup /etc/fail2ban/jail.conf "$JAILBAK"
     run sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local

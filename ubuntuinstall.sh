@@ -23,9 +23,8 @@ ensure_tmux_if_ssh() {
   local RECONNECT="tmux attach -t ubuntu-setup  # or:  ssh user@host 'tmux attach -t ubuntu-setup'"
   bold "SSH session detected. Re-running inside tmux so a disconnect will not abort the script."
   printf "  \033[1;36mCOPY BEFORE ANY DISCONNECT:\033[0m %s\n" "$RECONNECT"
-  local RC="${UBUNTU_INSTALL_RC:-0}"
   exec tmux new-session -A -s ubuntu-setup -n setup \
-    "REPO_RAW_BASE='$REPO_RAW_BASE' UBUNTU_INSTALL_RC='$RC' \
+    "REPO_RAW_BASE='$REPO_RAW_BASE' \
      bash -c 'trap \"tmux kill-session -t ubuntu-setup 2>/dev/null\" EXIT; \
               cd \"$ORIG_CWD\" && bash \"$SCRIPT_PATH\" \"\$@\"; rc=\$?; \
               if [ \$rc -eq 0 ]; then tmux kill-session -t ubuntu-setup 2>/dev/null; fi; exit \$rc' -- \"\$@\""
@@ -132,9 +131,9 @@ ask_category_enabled() {
 
 update_system() {
   msg "Updating system and installing base packages..."
-  run sudo apt-get update
-  run sudo apt-get upgrade -y
-  run sudo apt-get install -y \
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get update
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
       apt-transport-https software-properties-common \
       wget curl gnupg lsb-release ca-certificates
 }
@@ -149,7 +148,7 @@ setup_dnscrypt() {
   case "$REPLY_CHOICE" in
     3) info "Skipping dnscrypt-proxy."; return 0;;
   esac
-  run sudo apt-get install -y dnscrypt-proxy
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y dnscrypt-proxy
   run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.2.1:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
@@ -184,7 +183,7 @@ YAML
 
 setup_firewall() {
   msg "Firewall (UFW)"
-  run sudo apt-get install -y ufw
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
   run sudo ufw default deny incoming
   run sudo ufw default allow outgoing
   if [ "$USE_REMOTE_SSH" = "yes" ] || [ "$ENV_TYPE" = "server" ]; then
@@ -202,7 +201,7 @@ setup_tor() {
   if ! prompt_yn "Install the Tor daemon? (For Tor Browser, get it from torproject.org)" "n"; then
     info "Skipping Tor."; return 0
   fi
-  run sudo apt-get install -y tor
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tor
   warn "Tor is installed but /etc/tor/torrc is left untouched. Edit it for relay/transparent-proxy use."
   ok "Tor daemon installed."
 }
@@ -228,7 +227,7 @@ harden_ssh() {
   fi
   msg "SSH hardening (LOCKOUT-PRONE - each step will be confirmed)"
   if ! command -v sshd >/dev/null 2>&1; then
-    run sudo apt-get install -y openssh-server
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
     if ! command -v sshd >/dev/null 2>&1; then
       err "openssh-server install failed; cannot proceed with SSH hardening."; return 1
     fi
@@ -284,7 +283,7 @@ setup_fail2ban() {
   fi
   msg "Fail2ban"
   if ! prompt_yn "Install & enable Fail2ban with the sshd jail?" "y"; then return 0; fi
-  run sudo apt-get install -y fail2ban
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban
   if [ ! -f /etc/fail2ban/jail.local ]; then
     run sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
   fi
@@ -303,7 +302,7 @@ JAIL
 configure_unattended_upgrades() {
   msg "Unattended security upgrades"
   if ! prompt_yn "Enable automatic security updates?" "y"; then return 0; fi
-  run sudo apt-get install -y unattended-upgrades
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
   run sudo sed -i 's|//\s*Unattended-Upgrade::Allowed-Origins|Unattended-Upgrade::Allowed-Origins|' /etc/apt/apt.conf.d/50unattended-upgrades || true
   run sudo sed -i 's|Unattended-Upgrade::Automatic-Reboot "false"|Unattended-Upgrade::Automatic-Reboot "true"|' /etc/apt/apt.conf.d/50unattended-upgrades || true
   ok "Unattended upgrades enabled."
@@ -346,7 +345,7 @@ EOF
 setup_apparmor() {
   msg "AppArmor (MAC)"
   if ! prompt_yn "Install & enable AppArmor?" "y"; then return 0; fi
-  run sudo apt-get install -y apparmor apparmor-utils
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y apparmor apparmor-utils
   run sudo systemctl enable --now apparmor
   run sudo aa-status || true
 }
@@ -354,7 +353,7 @@ setup_apparmor() {
 harden_passwords() {
   msg "Password & lockout policy"
   if ! prompt_yn "Install libpam-pwquality and set minlen=14?" "y"; then return 0; fi
-  run sudo apt-get install -y libpam-pwquality
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libpam-pwquality
   declare -A pwq_vals=( [minlen]=14 [minclass]=3 [maxrepeat]=3 )
   for kw in "${!pwq_vals[@]}"; do
     grep -q "^$kw[[:space:]]*=" /etc/security/pwquality.conf 2>/dev/null || \
@@ -395,10 +394,10 @@ ask_other_scripts() {
 
 main() {
   bold "neohiro/ubuntu - general setup & hardening (interactive)"
-  ensure_tmux_if_ssh
   if [ "$EUID" -ne 0 ]; then
     err "This script must be run as root (use sudo)."; exit 1
   fi
+  ensure_tmux_if_ssh
 
   detect_or_ask_env
   ask_profile

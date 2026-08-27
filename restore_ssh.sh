@@ -42,6 +42,11 @@ prompt_yn() {
 run() {
   printf '  $ %s\n' "$*"
   "$@"
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    err "Command exited with code $rc: $*"
+    return $rc
+  fi
 }
 
 require_root() {

@@ -230,19 +230,18 @@ _verify_remote_gpg_signature() {
   if [ -n "$fpr" ]; then
     local signer
     signer=$(gpg --batch --verify "$url_dst" "$script" 2>&1 \
-              | awk '/Primary key fingerprint is ([A-F0-9 ]+)/ {print $NF}' \
-              | tr -d ' ')
+              | awk -F'[=:]' '/Primary key fingerprint/ {gsub(/ /,"",$NF); print toupper($NF); exit}')
     # gpg --verify output format varies; also try gpg --list-keys with the signer key id
     if [ -z "$signer" ]; then
       signer=$(gpg --batch --list-keys --keyid-format long "$url_dst" 2>/dev/null \
-                | awk '/^pub.*\// {sub(/.*\//,""); print; exit}')
+                | awk '/^pub.*\// {sub(/.*\//,""); print toupper($0); exit}')
     fi
-    if [ -n "$signer" ] && [ "$signer" != "$fpr" ]; then
+    if [ -n "$signer" ] && [ "$signer" != "$(printf '%s' "$fpr" | tr -d ' ' | tr 'a-f' 'A-F')" ]; then
       err "Signer key ($signer) does not match trusted fingerprint ($fpr)."
       rm -f "$gpg_out"
       return 1
     fi
-    ok "Signer fingerprint verified: ${signer:-$fpr}"
+    ok "Signer fingerprint verified: ${signer:-$(printf '%s' "$fpr" | tr -d ' ')}"
   fi
   rm -f "$gpg_out"
   return 0
@@ -1201,17 +1200,19 @@ harden_ssh() {
     fi
   fi
 
-  local BACKUP
+  local BACKUP dropin
   BACKUP="${SSHCFG}.bak.$(date +%s%N)"
   run sudo cp "$SSHCFG" "$BACKUP"
   record_backup "$SSHCFG" "$BACKUP"
 
-  local dropin
+  local -A SSH_DROPIN_BAKS
+  local bak
   for dropin in /etc/ssh/sshd_config.d/*.conf; do
     [ -f "$dropin" ] || continue
-    BACKUP="${dropin}.bak.$(date +%s%N)"
-    run sudo cp "$dropin" "$BACKUP"
-    record_backup "$dropin" "$BACKUP"
+    bak="${dropin}.bak.$(date +%s%N)"
+    SSH_DROPIN_BAKS[$dropin]="$bak"
+    run sudo cp "$dropin" "$bak"
+    record_backup "$dropin" "$bak"
   done
 
   local interactive=1
@@ -1252,8 +1253,11 @@ harden_ssh() {
   local sshd_check_err
   if ! sshd_check_err="$(sudo sshd -t 2>&1)"; then
     err "sshd config is INVALID: $sshd_check_err"
-    err "Reverting backup and NOT restarting."
+    err "Reverting ALL sshd_config backups and NOT restarting."
     run sudo cp -f "$BACKUP" "$SSHCFG"
+    for dropin in "${!SSH_DROPIN_BAKS[@]}"; do
+      run sudo cp -f "${SSH_DROPIN_BAKS[$dropin]}" "$dropin"
+    done
     return 1
   fi
 
@@ -1513,8 +1517,13 @@ rollback_mode() {
   info "Found ${#LATEST_BAK[@]} backed-up file(s)."
   echo
 
-  local i
-  for orig in "${!LATEST_BAK[@]}"; do
+  local i orig bak
+  # Sort keys so the dry-run output is deterministic and easy to review.
+  local -a sorted_origs
+  while IFS= read -r orig; do
+    [ -n "$orig" ] && sorted_origs+=("$orig")
+  done < <(printf '%s\n' "${!LATEST_BAK[@]}" | LC_ALL=C sort)
+  for orig in "${sorted_origs[@]}"; do
     bak="${LATEST_BAK[$orig]}"
     if [ ! -f "$bak" ]; then
       warn "Missing backup: $bak (skipping $orig)"

@@ -7,6 +7,8 @@
 
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/ubuntu/main}"
 TMP_DIR="$(mktemp -d)"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+ORIG_CWD="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 ensure_tmux_if_ssh() {
@@ -21,7 +23,12 @@ ensure_tmux_if_ssh() {
   local RECONNECT="tmux attach -t ubuntu-setup  # or:  ssh user@host 'tmux attach -t ubuntu-setup'"
   bold "SSH session detected. Re-running inside tmux so a disconnect will not abort the script."
   printf "  \033[1;36mCOPY BEFORE ANY DISCONNECT:\033[0m %s\n" "$RECONNECT"
-  exec tmux new-session -A -s ubuntu-setup -n setup "REPO_RAW_BASE='$REPO_RAW_BASE' bash \"\$0\" \"\$@\""
+  local RC="${UBUNTU_INSTALL_RC:-0}"
+  exec tmux new-session -A -s ubuntu-setup -n setup \
+    "REPO_RAW_BASE='$REPO_RAW_BASE' UBUNTU_INSTALL_RC='$RC' \
+     bash -c 'trap \"tmux kill-session -t ubuntu-setup 2>/dev/null\" EXIT; \
+              cd \"$ORIG_CWD\" && bash \"$SCRIPT_PATH\" \"\$@\"; rc=\$?; \
+              if [ \$rc -eq 0 ]; then tmux kill-session -t ubuntu-setup 2>/dev/null; fi; exit \$rc' -- \"\$@\""
 }
 
 bold() { printf "\033[1m%s\033[0m\n" "$*"; }
@@ -156,12 +163,11 @@ setup_dnscrypt() {
       run sudo tee "/etc/netplan/99-dnscrypt.yaml" >/dev/null <<'YAML'
 network:
   version: 2
-  ethernets:
-    all:
-      nameservers:
-        addresses: [127.0.0.1, 1.1.1.1]
-      dhcp4: true
+  renderer: networkd
+  nameservers:
+    addresses: [127.0.0.1, 1.1.1.1]
 YAML
+      warn "If your system uses NetworkManager as the renderer, set 'renderer: NetworkManager' instead."
       run sudo netplan apply
       ;;
     2) # NetworkManager

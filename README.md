@@ -26,7 +26,7 @@ If you launch the script over SSH, the very first thing it does is detect the SS
 tmux attach -t ubuntu-setup
 ```
 
-If you were disconnected entirely, log back in and run the same line. If you started the run from outside an existing SSH session, the auto-wrap is skipped and there's nothing to reconnect to.
+If you were disconnected entirely, log back in over SSH and run `tmux attach -t ubuntu-setup` to rejoin the session. If you started the one-liner from a local terminal (not over SSH), the tmux wrap is skipped automatically and there's nothing to re-attach to.
 
 ```bash
 sudo passwd root

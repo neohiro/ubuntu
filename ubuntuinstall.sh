@@ -109,12 +109,108 @@ info() { printf "  %s\n" "$*"; }
 
 msg() { echo "=> $*"; }
 
+# STRICT_RUN=1 makes run() propagate the actual exit code (default is 0,
+# so a single failed command does not abort the whole interactive run).
+# Set this in CI / unattended deployments to detect partial-failure runs.
+STRICT_RUN="${STRICT_RUN:-0}"
+_FAIL_COUNT=0
+
 run() {
   msg "$*"
   "$@"
   local rc=$?
-  if [ $rc -ne 0 ]; then err "Command failed (exit $rc): $*"; fi
+  if [ $rc -ne 0 ]; then
+    err "Command failed (exit $rc): $*"
+    _FAIL_COUNT=$((_FAIL_COUNT + 1))
+  fi
+  if [ "$STRICT_RUN" = "1" ]; then
+    return $rc
+  fi
   return 0
+}
+
+# Restore /etc from the latest snapshot.  Callable via --restore-etc-snapshot.
+_restore_etc_snapshot() {
+  if [ "$EUID" -ne 0 ]; then
+    err "This must be run as root."; return 1
+  fi
+  local snap_dir="/var/backups/etc-snapshots"
+  local latest
+  latest=$(ls -t "${snap_dir}"/etc-*.tar.gz 2>/dev/null | head -n1 || true)
+  if [ -z "$latest" ]; then
+    err "No /etc snapshot found in $snap_dir."
+    info "Snapshots are created automatically when ENABLE_ETC_SNAPSHOT=1 (the default)."
+    info "Re-run the hardening script with ENABLE_ETC_SNAPSHOT=1 to create one."
+    return 1
+  fi
+  bold "=== /etc snapshot restore ==="
+  info "Latest snapshot: $latest"
+  local size
+  size=$(sudo du -h "$latest" 2>/dev/null | awk '{print $1}')
+  info "Size: ${size:-unknown}"
+  printf "\033[1;31m  WARNING: This will OVERWRITE /etc with the snapshot contents.\033[0m\n"
+  printf "  Any hardening changes made since the snapshot was taken will be lost.\n"
+  printf "  DNS, SSH, firewall, and all other settings will be restored.\n\n"
+  if ! prompt_yn "Restore /etc from $latest?" "n"; then
+    info "Restore cancelled."; return 0
+  fi
+  if sudo tar -xzf "$latest" -C / 2>&1; then
+    ok "/etc restored from $latest"
+    info "You may need to: sudo systemctl restart ssh   (if SSH was changed)"
+    info "                  sudo systemctl restart systemd-resolved   (if DNS was changed)"
+    info "                  sudo reboot   (to reload all services)"
+  else
+    err "tar restore failed. Check the output above."
+    return 1
+  fi
+  return 0
+}
+
+# Take a tar.gz snapshot of /etc before hardening begins.  This is a safety
+# net that lets the user do a full restore without relying on the per-file
+# rollback log.  Skipped if ENABLE_ETC_SNAPSHOT=0 or if /var/backups is
+# not writable.  Only the latest snapshot is kept (old ones are removed).
+_ETC_SNAPSHOT_PATH=""
+_ETC_SNAPSHOT_LOG="/var/log/ubuntu-install-rollback.log"
+_ETC_SNAPSHOT_BACKUP_MARKER="__etc-snapshot__"
+
+_take_etc_snapshot() {
+  if [ "${ENABLE_ETC_SNAPSHOT:-1}" = "0" ]; then
+    info "ETC snapshot disabled (ENABLE_ETC_SNAPSHOT=0)."
+    return 0
+  fi
+  local snap_dir="/var/backups/etc-snapshots"
+  local snap_path
+  snap_path="${snap_dir}/etc-$(date +%s%N).tar.gz"
+  local prev
+  prev=$(ls -t "${snap_dir}"/etc-*.tar.gz 2>/dev/null | head -n1 || true)
+
+  if ! sudo mkdir -p "$snap_dir" 2>/dev/null; then
+    warn "Cannot create $snap_dir — /etc snapshot skipped."
+    return 0
+  fi
+
+  if sudo tar -czf "$snap_path" \
+     --exclude='/etc/ssl/private' \
+     --exclude='/etc/ssh/ssh_host_*_key' \
+     --exclude='/etc/passwd-' \
+     --exclude='/etc/shadow' \
+     --exclude='/etc/group-' \
+     -C / etc 2>/dev/null; then
+    sudo chmod 600 "$snap_path"
+    _ETC_SNAPSHOT_PATH="$snap_path"
+    # Remove previous snapshot (keep only the latest)
+    if [ -n "$prev" ] && [ "$prev" != "$snap_path" ]; then
+      sudo rm -f "$prev"
+    fi
+    info "Created /etc snapshot: $snap_path"
+    info "  Full /etc restore:  sudo tar -xzf $snap_path -C /"
+    info "  (May need sudo systemd-resolve --reload if /etc/resolv.conf was reverted)"
+    # Record in rollback log so --rollback knows about it
+    record_backup "$_ETC_SNAPSHOT_BACKUP_MARKER" "$snap_path"
+  else
+    warn "Failed to create /etc snapshot — continuing without it."
+  fi
 }
 
 prompt_yn() {
@@ -1711,6 +1807,11 @@ main() {
       restore_ssh_mode
       exit $?
       ;;
+    --restore-etc-snapshot)
+      bold "neohiro/ubuntu - Restore /etc from snapshot"
+      _restore_etc_snapshot
+      exit $?
+      ;;
     --rollback)
       shift
       bold "neohiro/ubuntu - Rollback (standalone)"
@@ -1724,12 +1825,19 @@ main() {
       ;;
     -h|--help)
       cat <<'USAGE'
-Usage: sudo bash ubuntuinstall.sh [--restore-ssh] [--rollback [--apply]] [-h]
+Usage: sudo bash ubuntuinstall.sh [--restore-ssh] [--restore-etc-snapshot] [--rollback [--apply]] [-h]
 
   (no flag)         Run the full interactive setup & hardening.
   --restore-ssh     Diagnose & fix the most common SSH lockout causes.
                     Use this from a console/Tailscale session if you got
                     locked out.
+  --restore-etc-snapshot
+                    Restore /etc from the latest snapshot taken before
+                    hardening (requires ENABLE_ETC_SNAPSHOT=1 when the
+                    hardening run was done).  Run this if your system is
+                    broken after hardening and the per-file rollback does
+                    not cover the damage.
+                    Usage: sudo bash ubuntuinstall.sh --restore-etc-snapshot
   --rollback        Dry-prints the inverse `cp` commands needed to undo
                     every change recorded in /var/log/ubuntu-install-rollback.log.
   --rollback --apply  Run those `cp` commands (latest backup wins).
@@ -1760,19 +1868,17 @@ USAGE
 
   show_progress
 
+  # Take a lightweight snapshot of /etc before any hardening so the entire
+  # config tree can be restored wholesale.  Skipped if ENABLE_ETC_SNAPSHOT=0.
+  _take_etc_snapshot
+
   if [ "$REPLY_PROFILE" = "4" ]; then
     maintenance_menu
-    bold "Done."
-    mark_step summary "running"
-    show_progress
-    print_metrics_summary
-    mark_step summary "done"
-    show_progress
-    info "Review changes. Reboot when ready: sudo reboot"
     if [ "$USE_REMOTE_SSH" = "yes" ]; then
       info "Because SSH may have been changed, verify a SECOND session can log in BEFORE closing this one."
     fi
-    exit 0
+    _print_run_summary
+    return $?
   fi
 
   ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; }
@@ -1792,13 +1898,6 @@ USAGE
   ask_other_scripts
   mark_step other_scripts "done"
 
-  bold "Done."
-  mark_step summary "running"
-  show_progress
-  print_metrics_summary
-  mark_step summary "done"
-  show_progress
-  info "Review changes. Reboot when ready: sudo reboot"
   if [ "$USE_REMOTE_SSH" = "yes" ]; then
     info "Because SSH was changed, verify a SECOND session can log in BEFORE closing this one."
     if [ "$SSH_AUTO_MODE" = "1" ]; then
@@ -1806,6 +1905,32 @@ USAGE
       info "reconnect via console (or out-of-band) and run:  sudo bash $0  --restore-ssh"
     fi
   fi
+  _print_run_summary
+}
+
+# Common end-of-run summary: print metrics and exit with the right code
+# under STRICT_RUN. Non-strict runs always exit 0 (interactive default).
+_print_run_summary() {
+  bold "Done."
+  mark_step summary "running"
+  show_progress
+  print_metrics_summary
+  mark_step summary "done"
+  show_progress
+  if [ -n "$_ETC_SNAPSHOT_PATH" ]; then
+    printf '\n  \033[1;36m━━━ /etc SNAPSHOT\033[0m\n'
+    printf '  Full /etc snapshot: \033[1;37m%s\033[0m\n' "$_ETC_SNAPSHOT_PATH"
+    printf '  Restore whole /etc:  sudo bash %q --restore-etc-snapshot\n' "$SCRIPT_PATH"
+  fi
+  if [ "$_FAIL_COUNT" -gt 0 ]; then
+    if [ "$STRICT_RUN" = "1" ]; then
+      err "$_FAIL_COUNT command(s) failed during the run (STRICT_RUN=1)."
+      return 1
+    else
+      warn "$_FAIL_COUNT command(s) failed during the run. Re-run with STRICT_RUN=1 to exit non-zero."
+    fi
+  fi
+  return 0
 }
 
 main "$@"

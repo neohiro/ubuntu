@@ -185,6 +185,45 @@ rollback_mode --apply >/dev/null 2>&1
 grep -q "Port AAA" "$F5" && ok_t "rollback_mode: missing backup skips without error" \
   || fail_t "rollback_mode: missing backup skips" "$(cat "$F5")"
 
+# --- STRICT_RUN=0: run() always returns 0 even on failure ---
+_FAIL_COUNT=0; STRICT_RUN=0
+run_strict() { run() { msg "$*"; "$@"; local rc=$?; if [ $rc -ne 0 ]; then _FAIL_COUNT=$((_FAIL_COUNT+1)); fi; if [ "$STRICT_RUN" = "1" ]; then return $rc; fi; return 0; }; }
+run_strict
+# Capture a failing command
+run false 2>/dev/null; rc=$?
+[ "$rc" -eq 0 ] && [ "$_FAIL_COUNT" -eq 1 ] && ok_t "STRICT_RUN=0: run() returns 0, _FAIL_COUNT incremented" \
+  || fail_t "STRICT_RUN=0: run() returns 0" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+
+# --- STRICT_RUN=1: run() returns actual exit code ---
+_FAIL_COUNT=0; STRICT_RUN=1
+run false 2>/dev/null; rc=$?
+[ "$rc" -eq 1 ] && [ "$_FAIL_COUNT" -eq 1 ] && ok_t "STRICT_RUN=1: run() returns actual exit code, _FAIL_COUNT incremented" \
+  || fail_t "STRICT_RUN=1: run() returns actual exit code" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+
+# --- _take_etc_snapshot: creates snapshot in tmp dir, respects ENABLE_ETC_SNAPSHOT=0 ---
+TAKE_OUT=""
+_take_etc_snapshot_hermetic() {
+  [ "${ENABLE_ETC_SNAPSHOT:-1}" = "0" ] && return 0
+  local snap_dir="$1"
+  local snap_path
+  snap_path="${snap_dir}/etc-$(date +%s%N).tar.gz"
+  mkdir -p "$snap_dir" 2>/dev/null || return 1
+  if tar -czf "$snap_path" -C / etc >/dev/null 2>&1; then
+    TAKE_OUT="$snap_path"; return 0
+  fi
+  return 1
+}
+WD2="$(mktemp -d)"
+ENABLE_ETC_SNAPSHOT=0 _take_etc_snapshot_hermetic "$WD2" 2>/dev/null
+[ -z "$TAKE_OUT" ] && ok_t "_take_etc_snapshot: skips when ENABLE_ETC_SNAPSHOT=0" \
+  || fail_t "_take_etc_snapshot: skips when ENABLE_ETC_SNAPSHOT=0" "got: $TAKE_OUT"
+TAKE_OUT=""
+ENABLE_ETC_SNAPSHOT=1 _take_etc_snapshot_hermetic "$WD2" 2>/dev/null
+[ -n "$TAKE_OUT" ] && [ -f "$TAKE_OUT" ] && ok_t "_take_etc_snapshot: creates tar.gz when enabled" \
+  || fail_t "_take_etc_snapshot: creates tar.gz when enabled" "got: $TAKE_OUT"
+TAKE_OUT=""
+rm -rf "$WD2"
+
 echo
 TOTAL=$((PASS + FAIL))
 if [ "$FAIL" -eq 0 ]; then

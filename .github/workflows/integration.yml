@@ -1,0 +1,124 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Shellcheck + bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on all shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null 2>&1 || true
+          find . -name '*.sh' -not -path './.git/*' | while IFS= read -r f; do
+            echo "=== $f ==="
+            shellcheck --severity=warning \
+              --exclude=SC1091,SC2086,SC2154,SC2046,SC1010,SC2034,SC2120 \
+              "$f" || { echo "FAIL: shellcheck $f"; exit 1; }
+          done
+          echo "All shellcheck passes."
+      - name: bash -n syntax check
+        run: |
+          find . -name '*.sh' -not -path './.git/*' | while IFS= read -r f; do
+            bash -n "$f" || { echo "FAIL: bash -n $f"; exit 1; }
+            echo "  $f: syntax OK"
+          done
+          echo "All syntax checks pass."
+
+  docker-recommended:
+    name: Docker — Recommended flow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ubuntuinstall.sh (Recommended profile) in Docker
+        run: |
+          docker build -t ubuntu-install-test -f - . <<'DOCKERFILE'
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+RUN apt-get update -qq && \
+    apt-get install -y -qq curl wget tmux bash >/dev/null 2>&1
+WORKDIR /workspace
+COPY . /workspace
+DOCKERFILE
+          docker run --rm -i ubuntu-install-test \
+            bash -c '
+              # In Docker (no TTY, no SSH session, server auto-detected):
+              # Stdin sequence for Recommended profile defaults:
+              #  1) confirm server env (auto-detected, prompt_yn default=Y)
+              #  2) skip remote SSH (prompt_yn default=N in no-TTY)
+              #  3) Recommended profile (prompt_choice default=1)
+              #  4) unattended upgrades (prompt_yn default=Y in no-TTY)
+              #  5) skip optimize/deepclean/other (all prompt_yn default=N)
+              printf "\n\n\n\n\n" | \
+                bash ubuntuinstall.sh 2>&1 | tee /tmp/install-log.txt; rc=$?
+              echo "EXIT_CODE=$rc" >> /tmp/install-log.txt
+              echo "--- Rollback log ---"
+              cat /var/log/ubuntu-install-rollback.log 2>/dev/null || echo "(none)"
+              echo "--- Exit code: $rc ---"
+              exit $rc
+            ' > /tmp/docker-recommended.txt 2>&1; ec=$?
+          echo "=== Docker output (last 60 lines) ==="
+          tail -60 /tmp/docker-recommended.txt || true
+          echo "=== Exit code: $ec ==="
+          if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
+          # Verify rollback log was created
+          if grep -q "EXIT_CODE=0" /tmp/docker-recommended.txt; then
+            echo "PASS: script exited cleanly."
+          else
+            echo "FAIL: script did not exit cleanly."
+            exit 1
+          fi
+
+  docker-maintenance:
+    name: Docker — Maintenance suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Maintenance suite (profile 4, Back) in Docker
+        run: |
+          docker build -t ubuntu-install-test -f - . <<'DOCKERFILE'
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+RUN apt-get update -qq && \
+    apt-get install -y -qq curl wget tmux bash expect >/dev/null 2>&1
+WORKDIR /workspace
+COPY . /workspace
+DOCKERFILE
+          # Use expect to drive the Maintenance menu:
+          # Stdin: confirm server env (no-TTY default=Y), skip SSH (default=N),
+          #        select profile 4 (Maintenance), pick "Back to main menu" (option 14, 1-indexed=15)
+          # The script then prints the summary and exits.
+          docker run --rm -i ubuntu-install-test \
+            expect -c '
+              set timeout 120
+              log_user 1
+              spawn bash ubuntuinstall.sh
+              # No SSH session so USE_REMOTE_SSH defaults to no (prompt skipped)
+              expect "Apply which set of categories"
+              send "4\r"
+              expect "Maintenance suite"
+              send "15\r"  ;# option 15 = Back to main menu (1-indexed)
+              expect eof
+              catch wait result
+              exit [lindex $result 3]
+            ' > /tmp/docker-maintenance.txt 2>&1; ec=$?
+          echo "=== Maintenance suite output (last 40 lines) ==="
+          tail -40 /tmp/docker-maintenance.txt || true
+          echo "=== Exit code: $ec ==="
+          if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
+          # Expect exits 0 if the script exits 0
+          if [ "$ec" -eq 0 ]; then
+            echo "PASS: Maintenance suite completed cleanly."
+          else
+            echo "FAIL: Maintenance suite exited with code $ec."
+            exit 1
+          fi

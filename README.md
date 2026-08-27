@@ -54,7 +54,11 @@ If you were disconnected entirely, log back in over SSH and run `tmux attach -t 
 # 1. Diagnose and auto-fix most lockout causes
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/restore_ssh.sh)"
 
-# 2. Or do it manually — re-enable password auth, restart sshd
+# 2. Or undo every config change the script made (dry-run):
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)" --rollback
+
+#    Apply for real:
+# 3. Or do it manually — re-enable password auth, restart sshd
 sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 sudo sshd -t && sudo systemctl restart ssh
 ```

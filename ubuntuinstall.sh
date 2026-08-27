@@ -171,7 +171,65 @@ run_remote_script() {
     err "Neither curl nor wget available; cannot fetch $name"; return 1
   fi
   chmod +x "$dst"
+
+  # Optional GPG verification. Disabled by default; enable by setting
+  #   NEOSIGN_GPG_LEVEL=required  NEOSIGN_GPG_FPR=<40-hex fingerprint>
+  # in the environment. `advisory` warns but does not abort. The
+  # signature is expected alongside the script at the same URL with a
+  # `.asc` suffix (detached cleartext signature).
+  local gpg_level="${NEOSIGN_GPG_LEVEL:-off}"
+  if [ "$gpg_level" != "off" ]; then
+    if _verify_remote_gpg_signature "$name" "$dst"; then
+      ok "GPG signature OK for $name"
+    else
+      err "GPG signature verification FAILED for $name"
+      if [ "$gpg_level" = "required" ]; then
+        err "Aborting (NEOSIGN_GPG_LEVEL=required). Run with NEOSIGN_GPG_LEVEL=off to override."
+        return 1
+      fi
+      warn "Continuing despite bad signature (NEOSIGN_GPG_LEVEL=advisory)."
+    fi
+  fi
+
   bash "$dst"
+}
+
+# Verify a detached cleartext GPG signature (.asc) against the script.
+# Returns 0 on a valid signature from the configured trust list, 1 otherwise.
+_verify_remote_gpg_signature() {
+  local name="$1" script="$2" sig url_dst
+  if ! command -v gpg >/dev/null 2>&1; then
+    err "gpg is not installed; cannot verify $name"
+    return 1
+  fi
+  local fpr="${NEOSIGN_GPG_FPR:-}"
+  if [ -z "$fpr" ]; then
+    err "NEOSIGN_GPG_FPR is not set; cannot verify $name"
+    return 1
+  fi
+  url_dst="${TMP_DIR}/${name}.asc"
+  if ! curl -fsSL "${REPO_RAW_BASE}/${name}.asc" -o "$url_dst" 2>/dev/null; then
+    err "Could not fetch ${name}.asc from $REPO_RAW_BASE"
+    return 1
+  fi
+  if ! gpg --batch --no-default-keyring \
+           --keyring "${NEOSIGN_GPG_KEYRING:-${TMP_DIR}/trustedkeys.kbx}" \
+           --trust-model always \
+           --verify "$url_dst" "$script" 2>/tmp/neosign-gpg-err.$$; then
+    err "gpg --verify failed: $(cat /tmp/neosign-gpg-err.$$)"
+    rm -f /tmp/neosign-gpg-err.$$
+    return 1
+  fi
+  rm -f /tmp/neosign-gpg-err.$$
+  # gpg verifies regardless of the configured fingerprint; the
+  # fingerprint pin is a separate check: any key matching $fpr is OK.
+  if gpg --batch --no-default-keyring \
+         --keyring "${NEOSIGN_GPG_KEYRING:-${TMP_DIR}/trustedkeys.kbx}" \
+         --list-keys "$fpr" >/dev/null 2>&1; then
+    return 0
+  fi
+  err "Signature verified but signer fingerprint $fpr is not in the trust list."
+  return 1
 }
 
 ENV_TYPE=""
@@ -927,8 +985,9 @@ EOF
 # /etc/ssh/sshd_config.d/*.conf is correctly rewritten.
 _set_or_append_sshd_config() {
   local param="$1" value="$2" cfg="$3"
-  if grep -qE "^#?${param}" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
-    run sudo sed -i "s/^#\?${param}.*/${param} ${value}/" "$cfg"
+  if grep -qE "^[[:space:]]*#[[:space:]]*${param}[[:space:]]" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null || \
+     grep -qE "^${param}[[:space:]]" "$cfg" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+    run sudo sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" "$cfg"
   else
     printf '%s %s\n' "$param" "$value" | run sudo tee -a "$cfg" >/dev/null
   fi
@@ -1323,6 +1382,103 @@ ask_other_scripts() {
   fi
 }
 
+# --- Rollback mode ---
+# Reads /var/log/ubuntu-install-rollback.log (format: original<TAB>backup)
+# and either dry-prints the inverse `cp` commands or, with --apply, runs
+# them in reverse order so the latest backup wins. Skips entries whose
+# backup no longer exists, logs everything it does.
+rollback_mode() {
+  local apply=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1 ;;
+      *)       warn "rollback_mode: ignoring unknown arg '$1'" ;;
+    esac
+    shift
+  done
+
+  bold "=== Rollback mode ==="
+
+  if [ "$EUID" -ne 0 ]; then
+    err "Rollback must be run as root."; return 1
+  fi
+
+  if [ ! -f "$ROLLBACK_LOG" ]; then
+    info "No rollback log at $ROLLBACK_LOG; nothing to undo."
+    return 0
+  fi
+
+  # Parse the log. Comments (#) and blank lines are ignored. The first
+  # TAB on a line separates original from backup; any further TABs are
+  # part of the backup path.
+  # We use a map (original -> latest backup) so multiple entries for the
+  # same file collapse to the most recent one (the actual semantics the
+  # user wants: "restore the latest backup of each file").
+  declare -A LATEST_BAK
+  local -a missing
+  local line orig bak
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    case "$line" in
+      *$'\t'*)
+        orig="${line%%$'\t'*}"
+        bak="${line#*$'\t'}"
+        ;;
+      *)
+        warn "Skipping malformed line in $ROLLBACK_LOG: $line"
+        continue
+        ;;
+    esac
+    [ -n "$orig" ] && [ -n "$bak" ] || continue
+    LATEST_BAK[$orig]="$bak"
+  done < "$ROLLBACK_LOG"
+
+  if [ "${#LATEST_BAK[@]}" -eq 0 ]; then
+    info "Rollback log is empty; nothing to undo."
+    return 0
+  fi
+
+  info "Found ${#LATEST_BAK[@]} backed-up file(s)."
+  echo
+
+  local i
+  for orig in "${!LATEST_BAK[@]}"; do
+    bak="${LATEST_BAK[$orig]}"
+    if [ ! -f "$bak" ]; then
+      warn "Missing backup: $bak (skipping $orig)"
+      missing+=("$bak")
+      continue
+    fi
+    if [ "$apply" = "1" ]; then
+      printf '  $ sudo cp -f %s %s\n' "$bak" "$orig"
+      if sudo cp -f "$bak" "$orig"; then
+        ok "Restored $orig from $bak"
+      else
+        err "Failed to restore $orig from $bak"
+      fi
+    else
+      printf '  sudo cp -f %s %s\n' "$bak" "$orig"
+    fi
+  done
+
+  if [ "$apply" = "1" ]; then
+    echo
+    info "Done. Review with:  sudo sshd -t   (and reload any service you changed)"
+  else
+    echo
+    info "Dry-run only. To actually apply:  sudo bash $0 --rollback --apply"
+  fi
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo
+    warn "${#missing[@]} backup file(s) were missing; their originals were not restored."
+  fi
+
+  return 0
+}
+
 # --- Restore-SSH mode (also callable from restore_ssh.sh) ---
 # Walks through every step the script may have touched and proposes a
 # safe undo. Intended to be re-run from console (or Tailscale SSH) when
@@ -1473,14 +1629,29 @@ main() {
       restore_ssh_mode
       exit $?
       ;;
+    --rollback)
+      shift
+      bold "neohiro/ubuntu - Rollback (standalone)"
+      rollback_mode "$@"
+      exit $?
+      ;;
+    --rollback=*)
+      bold "neohiro/ubuntu - Rollback (standalone)"
+      rollback_mode "${1#--rollback=}"
+      exit $?
+      ;;
     -h|--help)
       cat <<'USAGE'
-Usage: sudo bash ubuntuinstall.sh [--restore-ssh] [-h]
+Usage: sudo bash ubuntuinstall.sh [--restore-ssh] [--rollback [--apply]] [-h]
 
-  (no flag)  Run the full interactive setup & hardening.
-  --restore-ssh   Diagnose & fix the most common SSH lockout causes.
-                  Use this from a console/Tailscale session if you got locked out.
-  -h, --help  Show this help.
+  (no flag)         Run the full interactive setup & hardening.
+  --restore-ssh     Diagnose & fix the most common SSH lockout causes.
+                    Use this from a console/Tailscale session if you got
+                    locked out.
+  --rollback        Dry-prints the inverse `cp` commands needed to undo
+                    every change recorded in /var/log/ubuntu-install-rollback.log.
+  --rollback --apply  Run those `cp` commands (latest backup wins).
+  -h, --help        Show this help.
 USAGE
       exit 0
       ;;

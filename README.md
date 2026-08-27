@@ -2,7 +2,19 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
 [![Build Status](https://github.com/neohiro/ubuntu/actions/workflows/release.yml/badge.svg)](https://github.com/neohiro/ubuntu/actions)
 
-Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell). Offers a more secure starting point for any new super user.
+Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell).
+
+## One-step automated setup
+
+Run the general interactive script directly from the repo — it prompts you per category (environment type, SSH lockout-prone steps, ambiguous DNS/Tor/IPv6 choices, and the new helper scripts are fetched on-demand):
+
+```bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)"
+```
+
+> Review it first: `curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh | less`
+
+**Profiles:** the script asks which profile to apply — Recommended (safe), Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/DeepClean), or Custom (you confirm every step). Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything. Offers a more secure starting point for any new super user.
 
 ```bash
 sudo passwd root
@@ -125,7 +137,7 @@ sudo systemctl restart tor
 ```
 ## System Logging
 
-To limit system file growth on Linux & if your drive is already getting full, run this script: [DeepClean](https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh)
+To limit system file growth on Linux & if your drive is already getting full, run this script: [DeepClean](https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh) (also available as a prompted category inside `ubuntuinstall.sh`)
 
 ## Fail2BAN
 
@@ -274,7 +286,7 @@ ss -tulnp
 ```
 Disable daemons a desktop rarely needs (skip this on servers using them):
 
-Run this script to reduce surface attack and optimize linux: [OptimizeLinuxASR](https://github.com/neohiro/ubuntu/blob/main/OptimizeLinuxASR.sh)
+Run this script to reduce surface attack and optimize linux: [OptimizeLinuxASR](https://github.com/neohiro/ubuntu/blob/main/OptimizeLinuxASR.sh) (also available as a prompted category inside `ubuntuinstall.sh`)
 
 Only allow listed users to schedule jobs:
 ```bash

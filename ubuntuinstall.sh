@@ -14,6 +14,23 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
 ROLLBACK_LOG="/var/log/ubuntu-install-rollback.log"
 
+# Ensure the rollback log exists and is writable before any backup is recorded.
+# Creates it with 0600 mode (owner-only) to avoid leaking paths to other users.
+_record_backup_init() {
+  local logdir="${ROLLBACK_LOG%/*}"
+  if [ "$EUID" -eq 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    # Running as root without sudo available: create log directly.
+    mkdir -p "$logdir" 2>/dev/null || true
+    touch "$ROLLBACK_LOG" 2>/dev/null || true
+    chmod 0600 "$ROLLBACK_LOG" 2>/dev/null || true
+  else
+    sudo mkdir -p "$logdir" 2>/dev/null || true
+    sudo touch "$ROLLBACK_LOG" 2>/dev/null || true
+    sudo chmod 0600 "$ROLLBACK_LOG" 2>/dev/null || true
+  fi
+}
+_record_backup_init
+
 # Append a backup-file line to a single rollback log so the user has one place
 # to find every file we modified and the backup we made before modifying it.
 record_backup() {
@@ -601,11 +618,13 @@ DirPort 0
 EOF
 _warn_if_not_tmux
 run sudo systemctl restart tor
-if ! sudo systemctl is-active --quiet tor; then
-  err "Primary tor failed - restoring torrc and aborting combined setup."
-  run sudo cp -f "${TORRC}.bak."* "$TORRC"
-  return 1
-fi
+  local tor_backup
+  if ! sudo systemctl is-active --quiet tor; then
+    err "Primary tor failed - restoring torrc and aborting combined setup."
+    tor_backup=$(ls -t "${TORRC}.bak."* 2>/dev/null | head -n1)
+    [ -n "$tor_backup" ] && run sudo cp -f "$tor_backup" "$TORRC"
+    return 1
+  fi
 ok "Primary tor (transparent proxy) active."
 
   msg "Configuring relay companion ($ROLE)"
@@ -783,11 +802,13 @@ _warn_if_not_tmux
 run sudo ufw allow "$OR_PORT"/tcp 2>/dev/null || true
 run sudo ufw allow "$DIR_PORT"/tcp 2>/dev/null || true
 run sudo systemctl restart tor
-if ! sudo systemctl is-active --quiet tor; then
-  err "tor failed - restoring torrc."
-  run sudo cp -f "${TORRC}.bak."* "$TORRC" 2>/dev/null
-  return 1
-fi
+  local tor_backup
+  if ! sudo systemctl is-active --quiet tor; then
+    err "tor failed - restoring torrc."
+    tor_backup=$(ls -t "${TORRC}.bak."* 2>/dev/null | head -n1)
+    [ -n "$tor_backup" ] && run sudo cp -f "$tor_backup" "$TORRC" 2>/dev/null
+    return 1
+  fi
 ok "Tor relay starting on ORPort=$OR_PORT DirPort=$DIR_PORT. Bandwidth: ${BW_RATE} MB/s, accounting: $ACCT_MAX"
 info "Check reachability at https://metrics.torproject.org/rs.html (search your nickname)."
 info "First sync with other relays can take 20-60 minutes."
@@ -807,9 +828,14 @@ disable_ipv6() {
     run sudo cp /etc/sysctl.conf /var/backups/sysctl.conf.bak
     record_backup /etc/sysctl.conf /var/backups/sysctl.conf.bak
   fi
-  # Ensure sysctl.conf ends in a newline, then append. If the last byte is
-  # already \n, the shell's >> append starts a fresh line automatically.
-  run sudo bash -c 'last=$(tail -c1 /etc/sysctl.conf); [ "$last" != "" ] && [ "$last" != $'"'"'\n'"'"' ] && printf "\n" >> /etc/sysctl.conf'
+  # Detect trailing newline by writing the last byte to a temp file (avoids
+  # the newline-stripping behavior of command substitution in subshells).
+  # If the file ends in \n, the check succeeds and tee appends on a fresh line.
+  # If the file lacks a trailing \n, we prepend one so we don't glue content.
+  run sudo bash -c '
+    lastbyte=$(tail -c1 /etc/sysctl.conf | od -An -tx1 -N1 | tr -d " \n")
+    [ "$lastbyte" != "0a" ] && printf "\n" >> /etc/sysctl.conf
+  '
   run sudo tee -a /etc/sysctl.conf >/dev/null <<'EOF'
 
 # disabled by ubuntuinstall.sh
@@ -972,30 +998,14 @@ harden_ssh() {
   record_backup "$SSHCFG" "$BACKUP"
 
   if prompt_yn "Set PermitRootLogin no?" "y"; then
-    if grep -qE '^PermitRootLogin' "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
-      run sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHCFG"
-    else
-      run sudo tee -a "$SSHCFG" >/dev/null <<'SSHEOF'
-PermitRootLogin no
-SSHEOF
-    fi
+    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
     metrics_add services_hardened 1
   fi
 
   if prompt_yn "Reduce LoginGraceTime to 30s and MaxAuthTries to 3?" "y"; then
-    for param in LoginGraceTime MaxAuthTries MaxSessions; do
-      if grep -qE "^${param}" "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
-        case "$param" in
-          LoginGraceTime) run sudo sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 30s/' "$SSHCFG" ;;
-          MaxAuthTries)  run sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' "$SSHCFG" ;;
-          MaxSessions)    run sudo sed -i 's/^#\?MaxSessions.*/MaxSessions 2/' "$SSHCFG" ;;
-        esac
-      else
-        printf '%s %s\n' "$param" \
-          "$(case "$param" in LoginGraceTime) echo "30s";; MaxAuthTries) echo "3";; MaxSessions) echo "2";; esac)" \
-          | run sudo tee -a "$SSHCFG" >/dev/null
-      fi
-    done
+    _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
+    _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
+    _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
     metrics_add services_hardened 1
   fi
 
@@ -1004,13 +1014,7 @@ SSHEOF
     printf "\033[1;31m[!] SSH port change — losing connection?\033[0m  Reconnect with:\n"
     printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
     read -r -p "Press Enter to continue, or Ctrl-C to abort... " _
-    if grep -qE '^Port' "$SSHCFG" /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
-      run sudo sed -i 's/^#\?Port 22$/Port 2222/' "$SSHCFG"
-    else
-      run sudo tee -a "$SSHCFG" >/dev/null <<'SSHEOF'
-Port 2222
-SSHEOF
-    fi
+    _set_or_append_sshd_config "Port" "2222" "$SSHCFG"
     run sudo ufw allow 2222/tcp
     metrics_add fw_rules_added 1
   fi

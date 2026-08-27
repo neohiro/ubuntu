@@ -200,11 +200,12 @@ _take_etc_snapshot() {
      -C / etc 2>/dev/null; then
     sudo chmod 600 "$snap_path"
     _ETC_SNAPSHOT_PATH="$snap_path"
-    # Remove all older snapshots, keep only the new one
+    # Remove all older snapshots (by name — nanos in name makes name-order
+    # equivalent to time-order; mtime would be wasted I/O).
     local prev
     while IFS= read -r prev; do
-      [ -n "$prev" ] && [ "$prev" != "$snap_path" ] && sudo rm -f "$prev" 2>/dev/null
-    done < <(find "$snap_dir" -maxdepth 1 -type f -name 'etc-*.tar.gz' ! -path "$snap_path" 2>/dev/null)
+      [ -n "$prev" ] && sudo rm -f "$prev" 2>/dev/null
+    done < <(find "$snap_dir" -maxdepth 1 -type f -name 'etc-*.tar.gz' ! -name "$(basename "$snap_path")" 2>/dev/null)
     info "Created /etc snapshot: $snap_path"
     info "  Full /etc restore:  sudo bash $0 --restore-etc-snapshot"
     info "  (May need sudo systemd-resolve --reload if /etc/resolv.conf was reverted)"
@@ -226,7 +227,10 @@ prompt_yn() {
     read -r a </dev/tty
   else
     # No interactive terminal available - use the default and warn.
-    warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to '$def' for: $q"
+    # QUIET_PROMPTS=1 silences this warning (useful in CI / Docker).
+    if [ "${QUIET_PROMPTS:-0}" != "1" ]; then
+      warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to '$def' for: $q"
+    fi
     a="$def"
   fi
   a="${a:-$def}"

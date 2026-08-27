@@ -15,18 +15,20 @@ jobs:
       - name: Run shellcheck on all shell scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null 2>&1 || true
-          find . -name '*.sh' -not -path './.git/*' | while IFS= read -r f; do
+          set -e
+          find . -name '*.sh' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
             echo "=== $f ==="
             shellcheck --severity=warning \
               --exclude=SC1091,SC2086,SC2154,SC2046,SC1010,SC2034,SC2120 \
-              "$f" || { echo "FAIL: shellcheck $f"; exit 1; }
+              "$f"
           done
           echo "All shellcheck passes."
       - name: bash -n syntax check
         run: |
-          find . -name '*.sh' -not -path './.git/*' | while IFS= read -r f; do
-            bash -n "$f" || { echo "FAIL: bash -n $f"; exit 1; }
+          set -e
+          find . -name '*.sh' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
             echo "  $f: syntax OK"
+            bash -n "$f"
           done
           echo "All syntax checks pass."
 
@@ -48,14 +50,12 @@ WORKDIR /workspace
 COPY . /workspace
 DOCKERFILE
           docker run --rm -i ubuntu-install-test \
+            env QUIET_PROMPTS=1 STRICT_RUN=1 \
             bash -c '
               # In Docker (no TTY, no SSH session, server auto-detected):
-              # Stdin sequence for Recommended profile defaults:
-              #  1) confirm server env (auto-detected, prompt_yn default=Y)
-              #  2) skip remote SSH (prompt_yn default=N in no-TTY)
-              #  3) Recommended profile (prompt_choice default=1)
-              #  4) unattended upgrades (prompt_yn default=Y in no-TTY)
-              #  5) skip optimize/deepclean/other (all prompt_yn default=N)
+              # All prompt_yn/prompt_choice fall back to defaults. Under
+              # STRICT_RUN=1 the script will exit non-zero on any partial
+              # failure, which surfaces real bugs in the runner.
               printf "\n\n\n\n\n" | \
                 bash ubuntuinstall.sh 2>&1 | tee /tmp/install-log.txt; rc=$?
               echo "EXIT_CODE=$rc" >> /tmp/install-log.txt
@@ -93,11 +93,11 @@ RUN apt-get update -qq && \
 WORKDIR /workspace
 COPY . /workspace
 DOCKERFILE
-          # Use expect to drive the Maintenance menu:
-          # Stdin: confirm server env (no-TTY default=Y), skip SSH (default=N),
-          #        select profile 4 (Maintenance), pick "Back to main menu" (option 14, 1-indexed=15)
-          # The script then prints the summary and exits.
+          # Use expect to drive the Maintenance menu.  QUIET_PROMPTS=1 silences
+          # the "not a TTY" warnings from every prompt; STRICT_RUN=1 ensures
+          # the runner exits non-zero if any action fails.
           docker run --rm -i ubuntu-install-test \
+            env QUIET_PROMPTS=1 \
             expect -c '
               set timeout 120
               log_user 1

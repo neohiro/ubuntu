@@ -129,6 +129,7 @@ Remove old system logs after 7 days
 ```bash
 sudo nano /etc/systemd/journald.conf
 ```
+
 Enter following text:
 ```bash
 # Set the maximum size of the journal logs in bytes
@@ -138,6 +139,8 @@ SystemMaxUse=200M
 MaxRetentionSec=7d
 ```
 Save the file.
+
+If your drive is already getting full, run this script: [DeepClean]([https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh])
 
 ## Fail2BAN
 

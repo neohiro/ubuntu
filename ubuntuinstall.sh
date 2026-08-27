@@ -9,6 +9,21 @@ REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/ubuntu
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+ensure_tmux_if_ssh() {
+  [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 0
+  [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] || return 0
+  if ! command -v tmux >/dev/null 2>&1; then
+    if [ "$EUID" -eq 0 ] || command -v sudo >/dev/null 2>&1; then
+      apt-get install -y tmux >/dev/null 2>&1 || sudo apt-get install -y tmux >/dev/null 2>&1 || true
+    fi
+  fi
+  command -v tmux >/dev/null 2>&1 || { warn "tmux unavailable; SSH disconnect may kill the run."; return 0; }
+  local RECONNECT="tmux attach -t ubuntu-setup  # or:  ssh user@host 'tmux attach -t ubuntu-setup'"
+  bold "SSH session detected. Re-running inside tmux so a disconnect will not abort the script."
+  printf "  \033[1;36mCOPY BEFORE ANY DISCONNECT:\033[0m %s\n" "$RECONNECT"
+  exec tmux new-session -A -s ubuntu-setup -n setup "REPO_RAW_BASE='$REPO_RAW_BASE' bash \"\$0\" \"\$@\""
+}
+
 bold() { printf "\033[1m%s\033[0m\n" "$*"; }
 warn() { printf "\033[1;33m[WARNING]\033[0m %s\n" "$*"; }
 err()  { printf "\033[1;31m[ERROR]\033[0m %s\n" "$*"; }
@@ -68,9 +83,6 @@ ENV_TYPE=""
 USE_REMOTE_SSH=""
 
 detect_or_ask_env() {
-  if [ -f /run/systemd/system ] || systemctl --quiet is-system-running 2>/dev/null; then
-    :
-  fi
   if dpkg -l ubuntu-desktop >/dev/null 2>&1 || dpkg -l kubuntu-desktop >/dev/null 2>&1 || dpkg -l xubuntu-desktop >/dev/null 2>&1; then
     ENV_TYPE="desktop"
   elif systemctl list-unit-files 2>/dev/null | grep -qE '^(ssh|sshd)\.service'; then
@@ -272,11 +284,12 @@ setup_fail2ban() {
   fi
   if ! grep -qE '^\[sshd\]' /etc/fail2ban/jail.local; then
     run sudo tee -a /etc/fail2ban/jail.local >/dev/null <<'JAIL'
+
 [sshd]
 enabled = true
 JAIL
   else
-    run sudo sed -i '/^\[sshd\]/,/^enabled/ { s/^enabled.*/enabled = true/; }' /etc/fail2ban/jail.local
+    run sudo sed -i '/^\[sshd\]/,/^\[/ { /^\[sshd\]/b; /^\[/b; s/^enabled[[:space:]]*=.*/enabled = true/; }' /etc/fail2ban/jail.local
   fi
   run sudo systemctl enable --now fail2ban
 }
@@ -336,10 +349,10 @@ harden_passwords() {
   msg "Password & lockout policy"
   if ! prompt_yn "Install libpam-pwquality and set minlen=14?" "y"; then return 0; fi
   run sudo apt-get install -y libpam-pwquality
-  for kw in minlen minclass maxrepeat; do
-    grep -q "^$kw" /etc/security/pwquality.conf 2>/dev/null || \
-      echo "$kw = $([ "$kw" = minlen ] && echo 14 || [ "$kw" = minclass ] && echo 3 || echo 3)" | \
-      sudo tee -a /etc/security/pwquality.conf >/dev/null
+  declare -A pwq_vals=( [minlen]=14 [minclass]=3 [maxrepeat]=3 )
+  for kw in "${!pwq_vals[@]}"; do
+    grep -q "^$kw[[:space:]]*=" /etc/security/pwquality.conf 2>/dev/null || \
+      echo "$kw = ${pwq_vals[$kw]}" | sudo tee -a /etc/security/pwquality.conf >/dev/null
   done
   run sudo tee /etc/security/faillock.conf >/dev/null <<'EOF'
 deny = 5
@@ -376,6 +389,7 @@ ask_other_scripts() {
 
 main() {
   bold "neohiro/ubuntu - general setup & hardening (interactive)"
+  ensure_tmux_if_ssh
   if [ "$EUID" -ne 0 ]; then
     err "This script must be run as root (use sudo)."; exit 1
   fi

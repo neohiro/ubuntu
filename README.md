@@ -16,6 +16,18 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 
 **Profiles:** the script asks which profile to apply — Recommended (safe), Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/DeepClean), or Custom (you confirm every step). Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
 
+### Running over SSH (resumable)
+
+If you launch the script over SSH, the very first thing it does is detect the SSH session and automatically re-exec itself inside a detached `tmux` session named `ubuntu-setup`, so a transient network blip won't abort the run.
+
+**Before you do anything that might disconnect (apt upgrade, UFW reload, SSH restart, etc.)** copy this line — you'll need it to re-attach after a disconnect:
+
+```bash
+tmux attach -t ubuntu-setup
+```
+
+If you were disconnected entirely, log back in and run the same line. If you started the run from outside an existing SSH session, the auto-wrap is skipped and there's nothing to reconnect to.
+
 ```bash
 sudo passwd root
 ```

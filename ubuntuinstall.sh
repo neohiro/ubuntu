@@ -283,8 +283,81 @@ setup_tor() {
     info "Skipping Tor."; return 0
   fi
   run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tor
-  warn "Tor is installed but /etc/tor/torrc is left untouched. Edit it for relay/transparent-proxy use."
+
+  if [ "$ENV_TYPE" = "server" ] && prompt_yn "Auto-configure Tor as a transparent proxy (server mode)? (routes ALL TCP/UDP 80+443 through Tor; apt updates will be slow)" "n"; then
+    configure_tor_transparent_proxy
+  elif prompt_yn "Set up a minimal Tor relay/middle relay? (no transparent proxy, just relay traffic)" "n"; then
+    configure_tor_relay
+  else
+    warn "Tor installed but /etc/tor/torrc left untouched. Edit manually for relay/transparent-proxy use."
+  fi
   ok "Tor daemon installed."
+}
+
+configure_tor_transparent_proxy() {
+  local TORRC="/etc/tor/torrc"
+  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+  run sudo tee "$TORRC" >/dev/null <<'EOF'
+VirtualAddrNetwork 10.192.0.0/10
+AutomapHostsOnResolve 1
+TransPort 127.0.0.1:9040 IsolateClientAddr IsolateClientProtocol IsolateDestAddr IsolateDestPort
+DNSPort 127.0.0.2:53
+AutomapHostsSuffixes .onion,.exit
+Log notice file /var/log/tor/notices.log
+EOF
+  _warn_if_not_tmux
+  run sudo systemctl restart tor
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+  local cmds=(
+    "iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN"
+    "iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN"
+    "iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040"
+    "iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040"
+  )
+  for c in "${cmds[@]}"; do
+    run sudo $c
+  done
+  run sudo netfilter-persistent save
+  ok "Tor transparent proxy active. Verify: curl --max-time 10 https://check.torproject.org/api/ip"
+  warn "apt updates will be much slower; consider 'sudo iptables -t nat -F OUTPUT' to revert."
+}
+
+configure_tor_relay() {
+  local NICK OR_PORT DIR_PORT CONTACT
+  prompt_choice "Pick a relay role" "Middle relay (default, recommended for first-time)" "Exit relay (only on a server you own and trust)" "Bridge relay (helps censored users)"
+  case "$REPLY_CHOICE" in
+    0) OR_PORT="auto"; DIR_PORT="auto";;
+    1) OR_PORT="443"; DIR_PORT="80"; warn "Exit relay exposes your IP for other users' traffic - operate only on infrastructure you own.";;
+    2) OR_PORT="auto"; DIR_PORT="auto";;
+  esac
+  NICK="${TOR_NICK:-UbuntuServer$(hostname -s 2>/dev/null | tr -dc 'A-Za-z0-9' || echo relay)}"
+  CONTACT="${TOR_CONTACT:-you@example.com}"
+
+  local TORRC="/etc/tor/torrc"
+  run sudo cp "$TORRC" "${TORRC}.bak.$(date +%s)"
+  run sudo tee "$TORRC" >/dev/null <<EOF
+ORPort $OR_PORT
+DirPort $DIR_PORT
+ExitPolicy reject *:*
+Nickname $NICK
+ContactInfo $CONTACT
+Log notice file /var/log/tor/notices.log
+EOF
+  _warn_if_not_tmux
+  if [ "$REPLY_CHOICE" -eq 0 ] || [ "$REPLY_CHOICE" -eq 2 ]; then
+    run sudo sed -i 's/^ExitPolicy reject \*:\*/ExitPolicy reject \*:\*/' "$TORRC"
+  else
+    run sudo sed -i 's/^ExitPolicy reject \*:\*/ExitPolicy accept \*:\*/' "$TORRC"
+  fi
+  run sudo ufw allow "$OR_PORT"/tcp 2>/dev/null || true
+  run sudo ufw allow "$DIR_PORT"/tcp 2>/dev/null || true
+  run sudo systemctl restart tor
+  ok "Tor relay starting. Check reachability at https://metrics.torproject.org/rs.html (search your nickname)."
+  info "First sync with other relays can take 20-60 minutes."
 }
 
 disable_ipv6() {

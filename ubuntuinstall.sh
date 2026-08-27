@@ -211,10 +211,14 @@ harden_ssh() {
   msg "SSH hardening (LOCKOUT-PRONE - each step will be confirmed)"
   if ! command -v sshd >/dev/null 2>&1; then
     run sudo apt-get install -y openssh-server
+    if ! command -v sshd >/dev/null 2>&1; then
+      err "openssh-server install failed; cannot proceed with SSH hardening."; return 1
+    fi
   fi
 
   local SSHCFG="/etc/ssh/sshd_config"
-  run sudo cp "$SSHCFG" "${SSHCFG}.bak.$(date +%s)"
+  local BACKUP="${SSHCFG}.bak.$(date +%s)"
+  run sudo cp "$SSHCFG" "$BACKUP"
 
   if prompt_yn "Set PermitRootLogin no?" "y"; then
     run sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHCFG"
@@ -249,7 +253,7 @@ harden_ssh() {
 
   if ! sudo sshd -t -f "$SSHCFG"; then
     err "sshd config is INVALID - reverting backup and NOT restarting."
-    run sudo cp "${SSHCFG}.bak."* "$SSHCFG" 2>/dev/null
+    run sudo cp -f "$BACKUP" "$SSHCFG"
     return 1
   fi
   run sudo systemctl restart ssh
@@ -266,7 +270,14 @@ setup_fail2ban() {
   if [ ! -f /etc/fail2ban/jail.local ]; then
     run sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
   fi
-  run sudo sed -i 's/^\[sshd\]$/[sshd]\nenabled = true/' /etc/fail2ban/jail.local
+  if ! grep -qE '^\[sshd\]' /etc/fail2ban/jail.local; then
+    run sudo tee -a /etc/fail2ban/jail.local >/dev/null <<'JAIL'
+[sshd]
+enabled = true
+JAIL
+  else
+    run sudo sed -i '/^\[sshd\]/,/^enabled/ { s/^enabled.*/enabled = true/; }' /etc/fail2ban/jail.local
+  fi
   run sudo systemctl enable --now fail2ban
 }
 
@@ -325,11 +336,11 @@ harden_passwords() {
   msg "Password & lockout policy"
   if ! prompt_yn "Install libpam-pwquality and set minlen=14?" "y"; then return 0; fi
   run sudo apt-get install -y libpam-pwquality
-  run sudo tee -a /etc/security/pwquality.conf >/dev/null <<'EOF'
-minlen = 14
-minclass = 3
-maxrepeat = 3
-EOF
+  for kw in minlen minclass maxrepeat; do
+    grep -q "^$kw" /etc/security/pwquality.conf 2>/dev/null || \
+      echo "$kw = $([ "$kw" = minlen ] && echo 14 || [ "$kw" = minclass ] && echo 3 || echo 3)" | \
+      sudo tee -a /etc/security/pwquality.conf >/dev/null
+  done
   run sudo tee /etc/security/faillock.conf >/dev/null <<'EOF'
 deny = 5
 unlock_time = 900

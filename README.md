@@ -28,6 +28,41 @@ tmux attach -t ubuntu-setup
 
 If you were disconnected entirely, log back in over SSH and run `tmux attach -t ubuntu-setup` to rejoin the session. If you started the one-liner from a local terminal (not over SSH), the tmux wrap is skipped automatically and there's nothing to re-attach to. When the script finishes successfully, the tmux session closes itself; if it fails, the session is left intact for inspection.
 
+### Reconnecting after a reboot ("connection refused")
+
+If you rebooted and SSH now refuses connections, sshd is not listening on the port you expect. Common causes and recovery:
+
+1. **You changed the SSH port (22 → 2222) during `harden_ssh`.** Reconnect with the new port:
+   ```bash
+   ssh -p 2222 user@host
+   ```
+   If you don't remember which port was chosen, scan from your laptop:
+   ```bash
+   nc -zv host 22; nc -zv host 2222; nc -zv host 8022
+   ```
+2. **sshd failed to start because of a bad config** (drop-in overrides, etc). Get an out-of-band shell — cloud provider console (AWS SSM / EC2 Serial Console, GCP Serial Console, Azure Boot Diagnostics, Hetzner KVM, DigitalOcean Recovery) or a rescue ISO. Then:
+   ```bash
+   sudo systemctl status ssh                 # why did sshd not start?
+   sudo journalctl -u ssh --no-pager | tail -40
+   sudo sshd -t                              # parse-check the config
+   ls /etc/ssh/sshd_config.d/                # drop-ins can override Port
+   cat /etc/ssh/sshd_config.d/*.conf
+   sudo ss -tulnp | grep sshd                 # confirm the actual listening port
+   ```
+3. **UFW is blocking the port you think is open.** From the out-of-band shell:
+   ```bash
+   sudo ufw status verbose
+   sudo ufw allow 2222/tcp    # or: sudo ufw allow ssh
+   ```
+4. **Last resort (rescue ISO):** boot a live ISO, mount the root filesystem, and either reset the port or restore the backup:
+   ```bash
+   mount /dev/sda1 /mnt
+   sed -i 's/^Port .*/Port 22/' /mnt/etc/ssh/sshd_config
+   # or restore the timestamped backup the script created:
+   #   ls /mnt/etc/ssh/sshd_config.bak.*  and  cp <latest> /mnt/etc/ssh/sshd_config
+   umount /mnt; reboot
+   ```
+
 ```bash
 sudo passwd root
 ```

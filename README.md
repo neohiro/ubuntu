@@ -16,6 +16,10 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 
 **Profiles:** the script asks which profile to apply — Recommended (safe), Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/DeepClean), or Custom (you confirm every step). Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
 
+**Full profile on a server runs in "auto" mode:** SSH hardening is applied without the interactive lockout-prone prompts (it never disables `PasswordAuthentication` unless it detects a working pubkey, and it never changes the port), so the only way to get locked out is the OpenSSH config breaking — in which case `restore_ssh.sh` (below) or Tailscale SSH can get you back in.
+
+**Progress checklist:** the script prints a colored bar chart (e.g. `━━━ PROGRESS ████████████░░░░ 12/17 (70%) ━━━`) before every step, so you always see what's already done and what's coming.
+
 ### Run summary and rollback
 
 At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:
@@ -40,40 +44,51 @@ tmux attach -t ubuntu-setup
 
 If you were disconnected entirely, log back in over SSH and run `tmux attach -t ubuntu-setup` to rejoin the session. If you started the one-liner from a local terminal (not over SSH), the tmux wrap is skipped automatically and there's nothing to re-attach to. When the script finishes successfully, the tmux session closes itself; if it fails, the session is left intact for inspection.
 
-### Reconnecting after a reboot ("connection refused")
+### Reconnecting after a reboot or lockout
 
-If you rebooted and SSH now refuses connections, sshd is not listening on the port you expect. Common causes and recovery:
+**Tailscale SSH bypasses OpenSSH settings** — it authenticates via the Tailscale identity layer, so it works even when `PasswordAuthentication=no` or the sshd service is down. Prefer Tailscale SSH for recovery.
 
-1. **You changed the SSH port (22 → 2222) during `harden_ssh`.** Reconnect with the new port:
-   ```bash
-   ssh -p 2222 user@host
-   ```
-   If you don't remember which port was chosen, scan from your laptop:
-   ```bash
-   nc -zv host 22; nc -zv host 2222; nc -zv host 8022
-   ```
-2. **sshd failed to start because of a bad config** (drop-in overrides, etc). Get an out-of-band shell — cloud provider console (AWS SSM / EC2 Serial Console, GCP Serial Console, Azure Boot Diagnostics, Hetzner KVM, DigitalOcean Recovery) or a rescue ISO. Then:
-   ```bash
-   sudo systemctl status ssh                 # why did sshd not start?
-   sudo journalctl -u ssh --no-pager | tail -40
-   sudo sshd -t                              # parse-check the config
-   ls /etc/ssh/sshd_config.d/                # drop-ins can override Port
-   cat /etc/ssh/sshd_config.d/*.conf
-   sudo ss -tulnp | grep sshd                 # confirm the actual listening port
-   ```
-3. **UFW is blocking the port you think is open.** From the out-of-band shell:
-   ```bash
-   sudo ufw status verbose
-   sudo ufw allow 2222/tcp    # or: sudo ufw allow ssh
-   ```
-4. **Last resort (rescue ISO):** boot a live ISO, mount the root filesystem, and either reset the port or restore the backup:
-   ```bash
-   mount /dev/sda1 /mnt
-   sed -i 's/^Port .*/Port 22/' /mnt/etc/ssh/sshd_config
-   # or restore the timestamped backup the script created:
-   #   ls /mnt/etc/ssh/sshd_config.bak.*  and  cp <latest> /mnt/etc/ssh/sshd_config
-   umount /mnt; reboot
-   ```
+**Quick recovery (from any working session — console, Tailscale SSH, or out-of-band):**
+
+```bash
+# 1. Diagnose and auto-fix most lockout causes
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/restore_ssh.sh)"
+
+# 2. Or do it manually — re-enable password auth, restart sshd
+sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo sshd -t && sudo systemctl restart ssh
+```
+
+**Specific causes and fixes:**
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Connection refused` after reboot | sshd not running or listening on wrong port | `sudo systemctl restart ssh; sudo ss -tulnp \| grep sshd` |
+| `No route to host` | UFW blocking | `sudo ufw allow ssh; sudo ufw allow 2222/tcp` |
+| `Permission denied (publickey)` | Port changed to non-22 | `ssh -p 2222 user@host` |
+| OpenSSH lockout (no pubkey, PasswordAuth=no) | Only possible if you have Tailscale SSH or console access | `restore_ssh.sh` above, or out-of-band console |
+
+**Out-of-band console only (no SSH at all):** boot cloud provider rescue ISO or use Hetzner/DO/Vultr recovery console, mount root, then:
+```bash
+sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /mnt/etc/ssh/sshd_config
+sed -i 's/^Port .*/Port 22/' /mnt/etc/ssh/sshd_config
+# or restore a backup: ls /mnt/etc/ssh/sshd_config.bak.* && cp <latest> /mnt/etc/ssh/sshd_config
+```
+
+### AppArmor and Tailscale SSH
+
+AppArmor profile for sshd **does not block Tailscale SSH**. Tailscale SSH is handled entirely by the `tailscaled` daemon running as a system service and uses its own TCP listeners on Tailscale's wireguard interfaces — it bypasses OpenSSH, UFW input rules, and AppArmor's sshd confinement alike. The AppArmor profile (`/etc/apparmor.d/usr.sbin.sshd`) only governs what the `sshd` binary itself can access on the filesystem and network; it has no effect on Tailscale's tunnel interfaces.
+
+### Restore-SSH module
+
+`restore_ssh.sh` is a standalone script that diagnoses and fixes the most common lockout causes:
+- sshd service state
+- UFW port blocking (checks the effective SSH port from sshd_config)
+- `PasswordAuthentication=no` in both `/etc/ssh/sshd_config` and `/etc/ssh/sshd_config.d/*.conf` drop-ins
+- presence of authorized_keys (to distinguish real lockout from a safe pubkey-only config)
+- rollback log entries for SSH-related files
+
+It asks before applying any fix. Run it from any working session (console, Tailscale SSH, or out-of-band). It is also callable as `sudo bash ubuntuinstall.sh --restore-ssh` from the same repo.
 
 
 

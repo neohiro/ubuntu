@@ -176,6 +176,8 @@ run_remote_script() {
 
 ENV_TYPE=""
 USE_REMOTE_SSH=""
+FULL_AUTO=0  # set to 1 when Full profile on a server so SSH hardening runs auto
+SSH_AUTO_MODE=0
 
 # --- metrics & run summary (shown at the end with a bar chart) ---
 declare -A METRICS=(
@@ -195,6 +197,81 @@ METRICS_START_DISK_KB=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
 metrics_add() {
   local key="$1" delta="${2:-1}"
   METRICS[$key]=$(( ${METRICS[$key]:-0} + delta ))
+}
+
+# --- dynamic progress checklist (printed before each step) ---
+# Order matches the call order in main(). Status: pending | running | done | skip
+declare -A CHECKLIST=(
+  [tmux_wrap]=pending
+  [env_detect]=pending
+  [system_update]=pending
+  [dnscrypt]=pending
+  [firewall]=pending
+  [tor]=pending
+  [ssh_hardening]=pending
+  [fail2ban]=pending
+  [unattended]=pending
+  [ipv6]=pending
+  [sysctl]=pending
+  [apparmor]=pending
+  [pam]=pending
+  [optimize_asr]=pending
+  [deepclean]=pending
+  [other_scripts]=pending
+  [summary]=pending
+)
+CHECKLIST_LABEL_tmux_wrap="Auto-wrap SSH session in tmux"
+CHECKLIST_LABEL_env_detect="Detect environment (desktop/server)"
+CHECKLIST_LABEL_system_update="System update + base packages"
+CHECKLIST_LABEL_dnscrypt="DNSCrypt + DNS routing"
+CHECKLIST_LABEL_firewall="Firewall (UFW)"
+CHECKLIST_LABEL_tor="Tor daemon"
+CHECKLIST_LABEL_ssh_hardening="SSH hardening (lockout-prone)"
+CHECKLIST_LABEL_fail2ban="Fail2ban"
+CHECKLIST_LABEL_unattended="Unattended security upgrades"
+CHECKLIST_LABEL_ipv6="Disable IPv6"
+CHECKLIST_LABEL_sysctl="Kernel/sysctl hardening"
+CHECKLIST_LABEL_apparmor="AppArmor"
+CHECKLIST_LABEL_pam="Password & lockout policy"
+CHECKLIST_LABEL_optimize_asr="OptimizeLinuxASR.sh (ASR)"
+CHECKLIST_LABEL_deepclean="DeepClean.sh (cleanup)"
+CHECKLIST_LABEL_other_scripts="Other helpers (Shadowsocks / server extras)"
+CHECKLIST_LABEL_summary="Print run summary"
+
+mark_step() {
+  CHECKLIST[$1]="${2:-done}"
+}
+show_progress() {
+  local done=0 total=0 i key
+  for key in tmux_wrap env_detect system_update dnscrypt firewall tor ssh_hardening fail2ban unattended ipv6 sysctl apparmor pam optimize_asr deepclean other_scripts summary; do
+    total=$((total + 1))
+    case "${CHECKLIST[$key]:-pending}" in
+      done)   done=$((done + 1)) ;;
+      skip)   done=$((done + 1)) ;;
+    esac
+  done
+  local pct=$(( done * 100 / total ))
+  local width=24
+  local filled=$(( pct * width / 100 ))
+  local empty=$(( width - filled ))
+  local bar_filled bar_empty
+  bar_filled="$(printf '%*s' "$filled" '' | tr ' ' '█')"
+  bar_empty="$(printf '%*s' "$empty" '' | tr ' ' '░')"
+  printf '\n\033[1;36m━━━ PROGRESS \033[1;32m%s\033[1;36m%s\033[0m \033[1;37m%d/%d (%d%%)\033[0m ━━━\n' \
+    "$bar_filled" "$bar_empty" "$done" "$total" "$pct"
+  for key in tmux_wrap env_detect system_update dnscrypt firewall tor ssh_hardening fail2ban unattended ipv6 sysctl apparmor pam optimize_asr deepclean other_scripts summary; do
+    local status="${CHECKLIST[$key]:-pending}"
+    local icon color
+    case "$status" in
+      done)    icon='✔'; color='\033[1;32m' ;;
+      running) icon='▶'; color='\033[1;33m' ;;
+      skip)    icon='⊘'; color='\033[1;30m' ;;
+      *)       icon='○'; color='\033[1;30m' ;;
+    esac
+    local label_var="CHECKLIST_LABEL_${key}"
+    printf '  %s%s\033[0m  %s\n' "$color" "$icon" "${!label_var}"
+  done
+  printf '\n'
 }
 
 _metrics_bar() {
@@ -976,11 +1053,18 @@ setup_authorized_keys_with_validation() {
 }
 
 harden_ssh() {
-  if [ "$USE_REMOTE_SSH" != "yes" ]; then
-    info "Skipping SSH hardening (you said you don't use remote SSH)."
-    return 0
+  local _unused="${FULL_AUTO:-}${SSH_AUTO_MODE:-}${1:-}"  # SC2120 workaround
+  if [ "$USE_REMOTE_SSH" != "yes" ] && [ "$SSH_AUTO_MODE" != "1" ]; then
+    info "Skipping SSH hardening (not a remote-SSH machine)." ; return 0
   fi
-  msg "SSH hardening (LOCKOUT-PRONE - each step will be confirmed)"
+
+  if [ "$1" = "--restore-ssh" ]; then
+    restore_ssh_mode; return $?
+  fi
+
+  local SSHCFG="/etc/ssh/sshd_config"
+  msg "SSH hardening"
+
   if ! command -v sshd >/dev/null 2>&1; then
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
     if ! command -v sshd >/dev/null 2>&1; then
@@ -988,28 +1072,30 @@ harden_ssh() {
     fi
   fi
 
-  backup_and_report_authorized_keys
-  audit_authorized_keys
-
-  local SSHCFG="/etc/ssh/sshd_config"
   local BACKUP
   BACKUP="${SSHCFG}.bak.$(date +%s)"
   run sudo cp "$SSHCFG" "$BACKUP"
   record_backup "$SSHCFG" "$BACKUP"
 
-  if prompt_yn "Set PermitRootLogin no?" "y"; then
-    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
-    metrics_add services_hardened 1
-  fi
+  local interactive=1
+  [ "$SSH_AUTO_MODE" = "1" ] && interactive=0
 
-  if prompt_yn "Reduce LoginGraceTime to 30s and MaxAuthTries to 3?" "y"; then
+  if [ "$interactive" = "1" ]; then
+    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
     _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
     _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
     _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
     metrics_add services_hardened 1
+  else
+    _set_or_append_sshd_config "PermitRootLogin" "no" "$SSHCFG"
+    _set_or_append_sshd_config "LoginGraceTime" "30s" "$SSHCFG"
+    _set_or_append_sshd_config "MaxAuthTries" "3" "$SSHCFG"
+    _set_or_append_sshd_config "MaxSessions" "2" "$SSHCFG"
+    metrics_add services_hardened 1
+    ok "[AUTO] PermitRootLogin=no, LoginGraceTime=30s, MaxAuthTries=3, MaxSessions=2"
   fi
 
-  if prompt_yn "Change SSH port from 22 to 2222? (can lock you out if firewall not updated)" "n"; then
+  if [ "$interactive" = "1" ] && prompt_yn "Change SSH port from 22 to 2222?" "n"; then
     _warn_if_not_tmux
     printf "\033[1;31m[!] SSH port change — losing connection?\033[0m  Reconnect with:\n"
     printf "  \033[1;36mssh -p 2222 %s@%s\033[0m\n" "$USER" "$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -1019,43 +1105,18 @@ harden_ssh() {
     metrics_add fw_rules_added 1
   fi
 
-  if prompt_yn "Disable password authentication (PubKey only)? THIS CAN LOCK YOU OUT" "n"; then
-    local ak_count=0 f c
-    for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
-      [ -f "$f" ] || continue
-      c=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null) || c=0
-      ak_count=$((ak_count + c))
-    done
-    if [ "$ak_count" -eq 0 ]; then
-      warn "No public keys found in any authorized_keys. Helping you set one up safely."
-      if ! setup_authorized_keys_with_validation; then
-        err "No working pubkey validated. Leaving PasswordAuthentication unchanged."
-        if prompt_yn "Re-enable PasswordAuthentication explicitly (yes)?" "y"; then
-          _set_or_append_sshd_config "PasswordAuthentication" "yes" "$SSHCFG"
-        fi
-      else
-        ok "Pubkey validated. Disabling password auth."
-        _set_or_append_sshd_config "PasswordAuthentication" "no" "$SSHCFG"
-        metrics_add services_hardened 1
-        metrics_add auth_keys_added 1
-      fi
-    else
-      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
-      printf "\033[1;33m│  Confirm your pubkey is one of the $ak_count listed above.         \033[0m\n"
-      printf "\033[1;33m│  If you are NOT sure, type 'no' to keep password auth enabled.     \033[0m\n"
-      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
-      if ! prompt_yn "Disable PasswordAuthentication? (type 'yes' to confirm)" "no"; then
-        warn "Leaving PasswordAuthentication unchanged."
-      else
-        _set_or_append_sshd_config "PasswordAuthentication" "no" "$SSHCFG"
-        metrics_add services_hardened 1
-      fi
+  if [ "$interactive" = "1" ]; then
+    if ! prompt_yn "Disable password authentication (PubKey only)? THIS CAN LOCK YOU OUT" "n"; then
+      return 0
     fi
+    if ! _ssh_disable_password_auth "$SSHCFG"; then
+      warn "Pubkey not validated; PasswordAuthentication left unchanged."
+    fi
+  else
+    ok "[AUTO] PasswordAuthentication handling in auto mode."
+    _ssh_disable_password_auth "$SSHCFG" || true
   fi
 
-  # Validate using sshd -t with the REAL config (not -f, which excludes
-  # /etc/ssh/sshd_config.d/*.conf drop-ins). Capture stderr so we can
-  # show the user the actual error.
   local sshd_check_err
   if ! sshd_check_err="$(sudo sshd -t 2>&1)"; then
     err "sshd config is INVALID: $sshd_check_err"
@@ -1063,9 +1124,52 @@ harden_ssh() {
     run sudo cp -f "$BACKUP" "$SSHCFG"
     return 1
   fi
-  _warn_if_not_tmux
+
+  if [ "$interactive" = "1" ]; then
+    _warn_if_not_tmux
+  fi
   run sudo systemctl restart ssh
-  ok "SSH hardened and restarted. Verify in a SECOND session before closing this one."
+  ok "SSH hardened and restarted."
+}
+
+_ssh_disable_password_auth() {
+  local cfg="$1" ak_count=0 f c
+  for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+    [ -f "$f" ] || continue
+    c=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null) || c=0
+    ak_count=$((ak_count + c))
+  done
+  if [ "$ak_count" -eq 0 ]; then
+    if [ "$SSH_AUTO_MODE" = "1" ]; then
+      warn "[AUTO] No pubkeys found. Leaving PasswordAuthentication=yes (no lockout)."
+      return 1
+    fi
+    warn "No public keys found in any authorized_keys."
+    if ! setup_authorized_keys_with_validation; then
+      err "No working pubkey validated. Leaving PasswordAuthentication unchanged."
+      return 1
+    fi
+    _set_or_append_sshd_config "PasswordAuthentication" "no" "$cfg"
+    metrics_add services_hardened 1
+    metrics_add auth_keys_added 1
+  else
+    if [ "$SSH_AUTO_MODE" = "1" ]; then
+      ok "[AUTO] $ak_count pubkey(s) found. Disabling PasswordAuthentication."
+      _set_or_append_sshd_config "PasswordAuthentication" "no" "$cfg"
+      metrics_add services_hardened 1
+    else
+      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+      printf "\033[1;33m│  Confirm your pubkey is one of the $ak_count listed above.         \033[0m\n"
+      printf "\033[1;33m│  If you are NOT sure, type 'no' to keep password auth enabled.     \033[0m\n"
+      printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m\n"
+      if ! prompt_yn "Disable PasswordAuthentication? (type 'yes' to confirm)" "no"; then
+        warn "Leaving PasswordAuthentication unchanged."; return 1
+      fi
+      _set_or_append_sshd_config "PasswordAuthentication" "no" "$cfg"
+      metrics_add services_hardened 1
+    fi
+  fi
+  return 0
 }
 
 setup_fail2ban() {
@@ -1219,39 +1323,220 @@ ask_other_scripts() {
   fi
 }
 
+# --- Restore-SSH mode (also callable from restore_ssh.sh) ---
+# Walks through every step the script may have touched and proposes a
+# safe undo. Intended to be re-run from console (or Tailscale SSH) when
+# the user is locked out.
+restore_ssh_mode() {
+  bold "=== Restore SSH mode ==="
+  info "This module scans the most common lockout causes and proposes fixes."
+  info "Each fix is opt-in so you stay in control."
+
+  if [ "$EUID" -ne 0 ]; then
+    err "Restore-SSH must be run as root."; return 1
+  fi
+
+  if ! command -v sshd >/dev/null 2>&1; then
+    err "sshd is not installed. Run:  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server"
+    return 1
+  fi
+
+  local SSHCFG="/etc/ssh/sshd_config"
+  local FIXES=()
+
+  # 1) Service running?
+  if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+    ok "sshd service is running."
+  else
+    FIXES+=("restart-ssh")
+    warn "sshd service is NOT running."
+  fi
+
+  # 2) Firewall blocks the port?
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE 'Status: active'; then
+    local port
+    port=$(awk '/^[[:space:]]*Port[[:space:]]/ {print $2; exit}' "$SSHCFG" 2>/dev/null)
+    port=${port:-22}
+    if ufw status 2>/dev/null | grep -qE "ALLOW IN.*${port}/tcp"; then
+      ok "UFW allows port $port/tcp."
+    else
+      FIXES+=("ufw-allow-current-port")
+      warn "UFW does not seem to allow port $port/tcp."
+    fi
+  else
+    info "UFW not active; skipping firewall check."
+  fi
+
+  # 3) PasswordAuthentication no without a pubkey?
+  if grep -qE '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$SSHCFG"; then
+    local ak_count=0 f c
+    for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+      [ -f "$f" ] || continue
+      c=$(grep -cE '^(ssh-|ecdsa-)' "$f" 2>/dev/null) || c=0
+      ak_count=$((ak_count + c))
+    done
+    if [ "$ak_count" -eq 0 ]; then
+      FIXES+=("reenable-password-auth")
+      err "PasswordAuthentication is no AND no pubkeys are installed — you are locked out by OpenSSH."
+    else
+      info "PasswordAuthentication is no but $ak_count pubkey(s) are present (OK if you connect via Tailscale SSH or a pubkey-capable client)."
+    fi
+  else
+    ok "PasswordAuthentication is not disabled."
+  fi
+
+  # 4) /etc/ssh/sshd_config.d/ drop-ins
+  if [ -d /etc/ssh/sshd_config.d ]; then
+    for f in /etc/ssh/sshd_config.d/*.conf; do
+      [ -e "$f" ] || continue
+      if grep -qE '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$f"; then
+        FIXES+=("disable-sshd-config.d-password-no")
+        warn "Drop-in $f disables PasswordAuthentication."
+      fi
+      if grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/\*\.conf' "$SSHCFG"; then
+        : # include present, fine
+      fi
+    done
+  fi
+
+  # 5) Restore from rollback log if present
+  if [ -f /var/log/ubuntu-install-rollback.log ]; then
+    info "Rollback log present:"
+    grep -E 'ssh' /var/log/ubuntu-install-rollback.log 2>/dev/null | sed 's/^/    /' || true
+  fi
+
+  # 6) Apply proposed fixes
+  if [ "${#FIXES[@]}" -eq 0 ]; then
+    ok "No obvious SSH lockout detected. Try: sudo sshd -t && sudo systemctl restart ssh"
+    return 0
+  fi
+
+  echo
+  info "Proposed fixes:"
+  for f in "${FIXES[@]}"; do
+    case "$f" in
+      restart-ssh)                  printf "  - Restart sshd service (sudo systemctl restart ssh)\n" ;;
+      ufw-allow-current-port)       printf "  - Open current SSH port in UFW\n" ;;
+      reenable-password-auth)       printf "  - Re-enable PasswordAuthentication (set 'yes')\n" ;;
+      disable-sshd-config.d-password-no) printf "  - Comment out PasswordAuthentication no in drop-ins\n" ;;
+    esac
+  done
+
+  if ! prompt_yn "Apply ALL proposed fixes now?" "y"; then
+    info "No changes made. Run individual suggestions manually."
+    return 0
+  fi
+
+  for f in "${FIXES[@]}"; do
+    case "$f" in
+      restart-ssh)
+        run sudo systemctl restart ssh
+        ok "sshd restarted."
+        ;;
+      ufw-allow-current-port)
+        local port
+        port=$(awk '/^[[:space:]]*Port[[:space:]]/ {print $2; exit}' "$SSHCFG" 2>/dev/null)
+        port=${port:-22}
+        run sudo ufw allow "${port}/tcp"
+        ok "UFW: opened $port/tcp."
+        ;;
+      reenable-password-auth)
+        _set_or_append_sshd_config "PasswordAuthentication" "yes" "$SSHCFG"
+        ok "PasswordAuthentication set to yes."
+        ;;
+      disable-sshd-config.d-password-no)
+        for d in /etc/ssh/sshd_config.d/*.conf; do
+          [ -e "$d" ] || continue
+          if grep -qE '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$d"; then
+            run sudo sed -i 's|^[[:space:]]*PasswordAuthentication[[:space:]]\+no|#PasswordAuthentication no  # disabled by restore_ssh.sh|' "$d"
+          fi
+        done
+        ok "Drop-in PasswordAuthentication no commented out."
+        ;;
+    esac
+  done
+
+  if sudo sshd -t 2>&1; then
+    run sudo systemctl restart ssh
+    ok "sshd config valid. Service restarted."
+  else
+    err "sshd -t still fails. Check /var/log/auth.log for the exact error."
+    return 1
+  fi
+}
+
 main() {
+  # Handle flags before anything else
+  case "${1:-}" in
+    --restore-ssh)
+      bold "neohiro/ubuntu - Restore SSH (standalone)"
+      restore_ssh_mode
+      exit $?
+      ;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: sudo bash ubuntuinstall.sh [--restore-ssh] [-h]
+
+  (no flag)  Run the full interactive setup & hardening.
+  --restore-ssh   Diagnose & fix the most common SSH lockout causes.
+                  Use this from a console/Tailscale session if you got locked out.
+  -h, --help  Show this help.
+USAGE
+      exit 0
+      ;;
+  esac
+
   bold "neohiro/ubuntu - general setup & hardening (interactive)"
   if [ "$EUID" -ne 0 ]; then
     err "This script must be run as root (use sudo)."; exit 1
   fi
   ensure_tmux_if_ssh
+  mark_step tmux_wrap "done"
   print_recovery_if_ssh
   _warn_if_not_tmux
 
   detect_or_ask_env
   ask_profile
 
-  ask_category_enabled "system"      "System update + base packages" "y" && update_system
-  ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && setup_dnscrypt
-  ask_category_enabled "firewall"    "Firewall (UFW)" "y" && setup_firewall
-  ask_category_enabled "tor"         "Tor daemon" "n" && setup_tor
-  ask_category_enabled "ssh"         "SSH hardening (LOCKOUT PRONE)" "n" && harden_ssh
-  ask_category_enabled "fail2ban"    "Fail2ban" "n" && setup_fail2ban
-  ask_category_enabled "unattended"  "Unattended security upgrades" "y" && configure_unattended_upgrades
-  ask_category_enabled "ipv6"        "Disable IPv6 (risky)" "n" && disable_ipv6
-  ask_category_enabled "sysctl"      "Kernel/sysctl hardening profile" "n" && harden_sysctl
-  ask_category_enabled "apparmor"    "AppArmor" "n" && setup_apparmor
-  ask_category_enabled "pam"         "Password & lockout policy" "n" && harden_passwords
-  ask_category_enabled "optimize"    "Run OptimizeLinuxASR.sh (new helper)" "n" && run_optimize_asr
-  ask_category_enabled "deepclean"   "Run DeepClean.sh (new helper)" "n" && run_deepclean
+  # Full + server => run SSH hardening in auto mode (no interactive lockout-prone prompts)
+  if [ "$REPLY_PROFILE" = "2" ] && [ "$ENV_TYPE" = "server" ]; then
+    FULL_AUTO=1
+    SSH_AUTO_MODE=1
+    USE_REMOTE_SSH="yes"  # treat as remote because we're a headless server
+  fi
+
+  show_progress
+
+  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; }
+  ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && { mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; }
+  ask_category_enabled "firewall"    "Firewall (UFW)" "y"                      && { mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; }
+  ask_category_enabled "tor"         "Tor daemon" "n"                          && { mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; }
+  ask_category_enabled "ssh"         "SSH hardening (lockout-prone)" "n"       && { mark_step ssh_hardening "running"; show_progress; harden_ssh; mark_step ssh_hardening "done"; }
+  ask_category_enabled "fail2ban"    "Fail2ban" "n"                            && { mark_step fail2ban running; show_progress; setup_fail2ban; mark_step fail2ban done; }
+  ask_category_enabled "unattended"  "Unattended security upgrades" "y"        && { mark_step unattended "running"; show_progress; configure_unattended_upgrades; mark_step unattended "done"; }
+  ask_category_enabled "ipv6"        "Disable IPv6 (risky)" "n"                && { mark_step ipv6 running; show_progress; disable_ipv6; mark_step ipv6 done; }
+  ask_category_enabled "sysctl"      "Kernel/sysctl hardening profile" "n"     && { mark_step sysctl "running"; show_progress; harden_sysctl; mark_step sysctl "done"; }
+  ask_category_enabled "apparmor"    "AppArmor" "n"                            && { mark_step apparmor "running"; show_progress; setup_apparmor; mark_step apparmor "done"; }
+  ask_category_enabled "pam"         "Password & lockout policy" "n"           && { mark_step pam "running"; show_progress; harden_passwords; mark_step pam "done"; }
+  ask_category_enabled "optimize"    "Run OptimizeLinuxASR.sh (new helper)" "n" && { mark_step optimize_asr "running"; show_progress; run_optimize_asr; mark_step optimize_asr "done"; }
+  ask_category_enabled "deepclean"   "Run DeepClean.sh (new helper)" "n"       && { mark_step deepclean "running"; show_progress; run_deepclean; mark_step deepclean "done"; }
 
   ask_other_scripts
+  mark_step other_scripts "done"
 
   bold "Done."
+  mark_step summary "running"
+  show_progress
   print_metrics_summary
+  mark_step summary "done"
+  show_progress
   info "Review changes. Reboot when ready: sudo reboot"
   if [ "$USE_REMOTE_SSH" = "yes" ]; then
     info "Because SSH was changed, verify a SECOND session can log in BEFORE closing this one."
+    if [ "$SSH_AUTO_MODE" = "1" ]; then
+      info "Full+server auto mode: SSH was hardened automatically. If anything went wrong,"
+      info "reconnect via console (or out-of-band) and run:  sudo bash $0  --restore-ssh"
+    fi
   fi
 }
 

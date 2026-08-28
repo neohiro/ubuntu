@@ -31,11 +31,13 @@ _set_or_append_sshd_config() {
       target="$dropin"; break
     fi
   done
+  # Idempotency: dedup all existing directives for this param, then
+  # append exactly one.  Mirrors the production implementation in
+  # linuxinstall.sh / ubuntuinstall.sh.
   if grep -qE "^[[:space:]]*#?[[:space:]]*${param}[[:space:]]" "$target" 2>/dev/null; then
-    sed -i -E "s/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/${param} ${value}/" "$target"
-  else
-    printf '%s %s\n' "$param" "$value" | tee -a "$target" >/dev/null
+    sed -i -E "/^[[:space:]]*#?[[:space:]]*${param}[[:space:]].*/d" "$target"
   fi
+  printf '%s %s\n' "$param" "$value" >> "$target"
 }
 
 # =========================================================================

@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 #
 # neohiro/linux  -  general interactive setup & hardening script
 # Auto-detects Ubuntu / Debian / RHEL / AlmaLinux / Rocky / Fedora /
@@ -8,7 +8,7 @@
 # Run as root:   sudo bash linuxinstall.sh
 #
 
-REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/linux/main}"
+REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/ubuntu/main}"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 ORIG_CWD="$(pwd)"
 
@@ -68,8 +68,8 @@ else
 fi
 unset _NEOHIRO_LIB_DIR
 
-RECOVERY_CMD="tmux attach -t linux-setup   # reconnect after SSH disconnect"
-ROLLBACK_LOG="${ROLLBACK_LOG:-/var/log/linux-install-rollback.log}"
+RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
+ROLLBACK_LOG="${ROLLBACK_LOG:-/var/log/ubuntu-install-rollback.log}"
 
 # Ensure the rollback log exists and is writable before any backup is recorded.
 # Creates it with 0600 mode (owner-only) to avoid leaking paths to other users.
@@ -218,7 +218,7 @@ _ssh_safe_restart() {
 
   # Validate before touching anything.
   if ! sudo sshd -t 2>&1; then
-    err "sshd config invalid — NOT restarting. Reverting."
+    err "sshd config invalid â€” NOT restarting. Reverting."
     [ -n "$backup" ] && [ -f "$backup" ] \
       && run sudo cp -f "$backup" "$sshcfg"
     return 1
@@ -234,15 +234,15 @@ _ssh_safe_restart() {
   # No reload support: do a restart.  Warn the user the session will
   # briefly drop.  Because ensure_tmux_if_ssh wraps the whole run in tmux,
   # a dropped SSH session can be recovered with `tmux attach`.
-  warn "sshd reload not supported — restarting. You may briefly lose this SSH session."
-  warn "Recover with:  tmux attach -t linux-setup"
+  warn "sshd reload not supported â€” restarting. You may briefly lose this SSH session."
+  warn "Recover with:  tmux attach -t ubuntu-setup"
   if ! sudo systemctl restart "$unit" 2>&1; then
-    err "sshd restart failed — reverting config."
+    err "sshd restart failed â€” reverting config."
     [ -n "$backup" ] && [ -f "$backup" ] \
       && run sudo cp -f "$backup" "$sshcfg"
     return 1
   fi
-  ok "SSH restarted. If disconnected, run:  tmux attach -t linux-setup"
+  ok "SSH restarted. If disconnected, run:  tmux attach -t ubuntu-setup"
 }
 _sshd_unit() {
   if systemctl is-active --quiet sshd 2>/dev/null; then echo sshd; return 0; fi
@@ -275,17 +275,17 @@ ensure_tmux_if_ssh() {
   # by absolute path; on clean exit it tears the tmux session down.
   local inner
   inner=$(cat <<'INNER_EOF'
-trap 'tmux kill-session -t linux-setup 2>/dev/null' EXIT
+trap 'tmux kill-session -t ubuntu-setup 2>/dev/null' EXIT
 cd "$1" && shift
 bash "$1" "$@"
 rc=$?
 if [ "$rc" -eq 0 ]; then
-  tmux kill-session -t linux-setup 2>/dev/null
+  tmux kill-session -t ubuntu-setup 2>/dev/null
 fi
 exit "$rc"
 INNER_EOF
 )
-  exec tmux new-session -A -s linux-setup -n setup \
+  exec tmux new-session -A -s ubuntu-setup -n setup \
     "cd $(printf '%q' "$ORIG_CWD") && bash $(printf '%q' "$SCRIPT_PATH")"
 }
 
@@ -295,6 +295,7 @@ INNER_EOF
 # so a single failed command does not abort the whole interactive run).
 # Set this in CI / unattended deployments to detect partial-failure runs.
 STRICT_RUN="${STRICT_RUN:-0}"
+QUICK_MODE="${QUICK_MODE:-0}"
 _FAIL_COUNT=0
 
 run() {
@@ -313,6 +314,37 @@ run() {
     return $rc
   fi
   return 0
+}
+
+# Offer a Retry / Skip / Abort choice after a step failure.
+# Only prompts when running interactively (tty + not QUIET_PROMPTS).
+# Returns: 0 = retry, 1 = skip, 2 = abort.
+_prompt_failure_recovery() {
+  local step_label="$1" rc="$2"
+  if [ "${QUIET_PROMPTS:-0}" = "1" ] || [ ! -t 0 ]; then
+    warn "Step '$step_label' failed (exit $rc). Continuing (non-interactive)."
+    return 1
+  fi
+  printf '\n  %s %s\n' "$(_c '1;31m' '[FAIL]')" "Step '$step_label' exited with code $rc."
+  printf '  %s\n' "$(_c '1;37m' 'What do you want to do?')"
+  printf '  %s  %s\n' "$(_c '1;32m' '  1)') "Retry this step"
+  printf '  %s  %s\n' "$(_c '1;33m' '  2)') "Skip this step and continue"
+  printf '  %s  %s\n' "$(_c '1;31m' '  3)') "Abort the entire run"
+  local a
+  if [ -t 0 ]; then
+    read -r -p "Choose [1-3] (default 2 = skip): " a
+  elif [ -e /dev/tty ] && [ -r /dev/tty ]; then
+    printf 'Choose [1-3] (default 2 = skip): ' >/dev/tty
+    read -r a </dev/tty
+  else
+    a=2
+  fi
+  a="${a:-2}"
+  case "$a" in
+    1) return 0 ;;
+    3) err "Aborted by user after step '$step_label'."; exit 1 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Restore /etc from the latest snapshot.  Callable via --restore-etc-snapshot.
@@ -372,7 +404,7 @@ _take_etc_snapshot() {
   snap_path="${snap_dir}/etc-$(date +%s%N).tar.gz"
 
   if ! sudo mkdir -p "$snap_dir" 2>/dev/null; then
-    warn "Cannot create $snap_dir — /etc snapshot skipped."
+    warn "Cannot create $snap_dir â€” /etc snapshot skipped."
     return 0
   fi
 
@@ -387,7 +419,7 @@ _take_etc_snapshot() {
      -C / etc 2>/dev/null; then
     sudo chmod 600 "$snap_path"
     _ETC_SNAPSHOT_PATH="$snap_path"
-    # Remove all older snapshots (by name — nanos in name makes name-order
+    # Remove all older snapshots (by name â€” nanos in name makes name-order
     # equivalent to time-order; mtime would be wasted I/O).
     local prev
     while IFS= read -r prev; do
@@ -398,7 +430,7 @@ _take_etc_snapshot() {
     info "  (May need sudo systemd-resolve --reload if /etc/resolv.conf was reverted)"
   else
     sudo rm -f "$snap_path" 2>/dev/null
-    warn "Failed to create /etc snapshot — continuing without it."
+    warn "Failed to create /etc snapshot â€” continuing without it."
   fi
 }
 
@@ -542,7 +574,7 @@ USE_REMOTE_SSH=""
 FULL_AUTO=0  # set to 1 when Full profile on a server so SSH hardening runs auto
 SSH_AUTO_MODE=0
 _KERNEL_UPDATE_PENDING=0  # set to 1 by update_kernel; consumed by _print_run_summary
-# ── Cross-distro package-manager and distro detection ──────────────────────
+# â”€â”€ Cross-distro package-manager and distro detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Detected once at script start; every other function reads $PKG_MGR / $DISTRO.
 DRY_RUN=0           # set to 1 to preview without executing
 STEP_MODE=0         # set to 1 to run a single named step
@@ -600,12 +632,12 @@ pkg_update() {
     apt)    run sudo env DEBIAN_FRONTEND=noninteractive apt-get update ;;
     dnf)    info "Checking for updates (dnf check-update)..."
                sudo dnf check-update >/dev/null 2>&1; rc=$?
-               [ "$rc" -eq 100 ] && ok "Updates available — will upgrade." \
+               [ "$rc" -eq 100 ] && ok "Updates available â€” will upgrade." \
                || [ "$rc" -eq 0 ] && ok "System up to date." \
                || info "dnf check-update exited $rc." ;;
     yum)    info "Checking for updates (yum check-update)..."
                sudo yum check-update >/dev/null 2>&1; rc=$?
-               [ "$rc" -eq 100 ] && ok "Updates available — will upgrade." \
+               [ "$rc" -eq 100 ] && ok "Updates available â€” will upgrade." \
                || [ "$rc" -eq 0 ] && ok "System up to date." \
                || info "yum check-update exited $rc." ;;
     zypper) run sudo zypper --quiet refresh ;;
@@ -657,7 +689,7 @@ pkg_is_installed() {
   esac
 }
 
-# ── Firewall helpers (UFW on apt; firewalld everywhere else) ───────────
+# â”€â”€ Firewall helpers (UFW on apt; firewalld everywhere else) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FW_CMD=""   # ufw | firewall-cmd
 
 _fw_detect() {
@@ -873,10 +905,13 @@ _BAR_Filled='#'; _BAR_Empty='-'
 declare -A CHECKLIST=(
   [tmux_wrap]=pending
   [env_detect]=pending
+  [system]=pending
   [system_update]=pending
+  [dns]=pending
   [dnscrypt]=pending
   [firewall]=pending
   [tor]=pending
+  [ssh]=pending
   [ssh_hardening]=pending
   [fail2ban]=pending
   [unattended]=pending
@@ -884,6 +919,7 @@ declare -A CHECKLIST=(
   [sysctl]=pending
   [apparmor]=pending
   [pam]=pending
+  [optimize]=pending
   [optimize_asr]=pending
   [deepclean]=pending
   [other_scripts]=pending
@@ -891,10 +927,13 @@ declare -A CHECKLIST=(
 )
 CHECKLIST_LABEL_tmux_wrap="Auto-wrap SSH session in tmux"
 CHECKLIST_LABEL_env_detect="Detect environment (desktop/server)"
+CHECKLIST_LABEL_system="System update + base packages"
 CHECKLIST_LABEL_system_update="System update + base packages"
+CHECKLIST_LABEL_dns="DNSCrypt + DNS routing"
 CHECKLIST_LABEL_dnscrypt="DNSCrypt + DNS routing"
 CHECKLIST_LABEL_firewall="Firewall (UFW / firewalld)"
 CHECKLIST_LABEL_tor="Tor daemon"
+CHECKLIST_LABEL_ssh="SSH hardening (lockout-prone)"
 CHECKLIST_LABEL_ssh_hardening="SSH hardening (lockout-prone)"
 CHECKLIST_LABEL_fail2ban="Fail2ban"
 CHECKLIST_LABEL_unattended="Unattended security upgrades"
@@ -902,6 +941,7 @@ CHECKLIST_LABEL_ipv6="Disable IPv6"
 CHECKLIST_LABEL_sysctl="Kernel/sysctl hardening"
 CHECKLIST_LABEL_apparmor="AppArmor"
 CHECKLIST_LABEL_pam="Password & lockout policy"
+CHECKLIST_LABEL_optimize="OptimizeLinuxASR.sh (ASR)"
 CHECKLIST_LABEL_optimize_asr="OptimizeLinuxASR.sh (ASR)"
 CHECKLIST_LABEL_deepclean="DeepClean.sh (cleanup)"
 CHECKLIST_LABEL_other_scripts="Other helpers (Shadowsocks / server extras)"
@@ -909,6 +949,35 @@ CHECKLIST_LABEL_summary="Print run summary"
 
 mark_step() {
   CHECKLIST[$1]="${2:-done}"
+}
+
+# Print a one-line step header with preview text.
+# Usage: _step_begin <key> <label> <preview>
+_step_begin() {
+  local key="$1" label="$2" preview="$3"
+  mark_step "$key" running
+  show_progress
+  local _hr="â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
+  printf '\n%s\n' "$(_c '1;1;36m' "  â–¸ $label")"
+  [ -n "$preview" ] && printf '  %s %s\n' "$(_c '1;30m' 'â†’')" "$(_c '1;37m' "$preview")"
+  printf '%s\n' "$_hr"
+}
+
+# Print elapsed time after a step completes.
+# Usage: _step_end <key> <label>
+_step_end() {
+  local key="$1" label="$2"
+  mark_step "$key" done
+  local elapsed=$SECONDS
+  local min=$(( elapsed / 60 ))
+  local sec=$(( elapsed % 60 ))
+  local time_str
+  if [ "$min" -gt 0 ]; then
+    time_str="${min}m ${sec}s"
+  else
+    time_str="${sec}s"
+  fi
+  ok "($label done in ${time_str})"
 }
 
 # When --step STEP is set, run() is a no-op and ask_category_enabled returns 1
@@ -930,6 +999,28 @@ _valid_step() {
   case " $_VALID_STEPS " in *" $1 "*) return 0 ;; esac
   return 1
 }
+
+# Short preview text for each step â€” printed before the step runs.
+# Keep entries under ~70 chars so the terminal doesn't wrap.
+declare -A _STEP_PREVIEWS
+_STEP_PREVIEWS["system"]="apt update + upgrade, install base packages (curl, fail2ban, etc.)."
+_STEP_PREVIEWS["system_update"]="apt update + upgrade, install base packages (curl, fail2ban, etc.)."
+_STEP_PREVIEWS["dns"]="install dnscrypt-proxy; you choose between DoH, DNSCrypt, and DoT."
+_STEP_PREVIEWS["dnscrypt"]="install dnscrypt-proxy; you choose between DoH, DNSCrypt, and DoT."
+_STEP_PREVIEWS["firewall"]="install + enable UFW (or firewalld); allow OpenSSH; default-deny inbound."
+_STEP_PREVIEWS["tor"]="install + enable tor.service; configure SOCKS5 on 9050."
+_STEP_PREVIEWS["ssh"]="lockout-proof hardening: password off, key-only, no root, fail2ban, no IPv4 block."
+_STEP_PREVIEWS["ssh_hardening"]="lockout-proof hardening: password off, key-only, no root, fail2ban, no IPv4 block."
+_STEP_PREVIEWS["fail2ban"]="enable fail2ban with sshd jail; 5 retries / 10 min ban / 1h window."
+_STEP_PREVIEWS["unattended"]="enable unattended security upgrades; daily update + auto-reboot at 4am if needed."
+_STEP_PREVIEWS["ipv6"]="disable IPv6 system-wide (kernel + sysctl). Warned: may break IPv4 ping if not careful."
+_STEP_PREVIEWS["sysctl"]="apply hardened kernel/network sysctls (no IPv4 icmp-echo-block on deny)."
+_STEP_PREVIEWS["apparmor"]="enable AppArmor; enforce default profiles."
+_STEP_PREVIEWS["pam"]="tighten pam_faillock: 5 retries / 15 min lockout."
+_STEP_PREVIEWS["optimize"]="run OptimizeLinuxASR.sh (network/disk tweaks). Reversible."
+_STEP_PREVIEWS["optimize_asr"]="run OptimizeLinuxASR.sh (network/disk tweaks). Reversible."
+_STEP_PREVIEWS["deepclean"]="run DeepClean.sh (apt cache, journal, old kernels). Safe but uses disk."
+
 show_progress() {
   local done=0 total=0 i key
   for key in tmux_wrap env_detect system_update dnscrypt firewall tor ssh_hardening fail2ban unattended ipv6 sysctl apparmor pam optimize_asr deepclean other_scripts summary; do
@@ -1035,6 +1126,56 @@ print_metrics_summary() {
   printf '%s\n' "$_hr"
 }
 
+print_welcome() {
+  local _hr
+  _hr="$(printf 'â”€%.0s' {1..58})"
+  local _os_label _kernel _hostname
+  _os_label="$(awk -F= '/^NAME=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || uname -s)"
+  _kernel="$(uname -r)"
+  _hostname="$(hostname 2>/dev/null || echo unknown)"
+  local _step_count _ssh_note
+  case "$REPLY_PROFILE" in
+    1) _step_count=6 _ssh_note="(no SSH changes)" ;;
+    2) _step_count=10 _ssh_note="(includes SSH hardening)" ;;
+    3) _step_count=12 _ssh_note="(includes SSH hardening + Tor)" ;;
+    *) _step_count=0 _ssh_note="" ;;
+  esac
+  printf '\n%s\n' "$(_c '1;36m' "  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")"
+  printf '%s\n' "$(_c '1;36m' "  â•‘          neohiro/linux  â€”  Setup & Hardening             â•‘")"
+  printf '%s\n' "$(_c '1;36m' "  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")"
+  printf '\n  %-14s %s\n' "$(_c '1;30m' 'Host:')" "$(_c '1;37m' "$_hostname")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'OS:')" "$(_c '1;37m' "$_os_label")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Kernel:')" "$(_c '1;37m' "$_kernel")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Arch:')" "$(_c '1;37m' "$(uname -m)")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Run as:')" "$(_c '1;37m' "root ($(whoami))")"
+  printf '\n  %s\n' "$_hr"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Environment:')" "$ENV_TYPE"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Remote SSH:')" "$(_c '1;37m' "$USE_REMOTE_SSH")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Profile:')" "$(_c '1;37m' "Profile $REPLY_PROFILE â€” $(_profile_label)")"
+  if [ "$_step_count" -gt 0 ]; then
+    printf '  %-14s %s\n' "$(_c '1;30m' 'Steps:')" "$(_c '1;37m' "~$_step_count hardening steps $_ssh_note")"
+  fi
+  if [ "$QUICK_MODE" = "1" ]; then
+    printf '  %-14s %s\n' "$(_c '1;32m' 'Quick mode:')" "$(_c '1;32m' 'ON â€” using defaults, no individual prompts')"
+  fi
+  printf '  %s\n' "$_hr"
+  if [ -n "${TMUX:-}" ]; then
+    info "Running inside tmux â€” your session is protected against SSH disconnection."
+  fi
+}
+
+_profile_label() {
+  case "$REPLY_PROFILE" in
+    1) echo "Recommended" ;;
+    2) echo "Standard" ;;
+    3) echo "Full" ;;
+    4) echo "Custom" ;;
+    5) echo "Restore SSH" ;;
+    6) echo "Maintenance" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
 detect_or_ask_env() {
   if pkg_is_installed ubuntu-desktop || pkg_is_installed kubuntu-desktop || \
      pkg_is_installed xubuntu-desktop || pkg_is_installed fedora-workstation-desktop \
@@ -1060,6 +1201,29 @@ detect_or_ask_env() {
 }
 
 ask_profile() {
+  local _hr="â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
+  bold "Profile selection"
+  info "Choose how much hardening to apply. All changes are logged and reversible."
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;32m' '1) Recommended')" "$(_c '1;37m' 'Safe defaults â€” firewall, system updates, unattended upgrades.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'No risk of SSH lockout.  ~6 steps.  Takes 1-3 min.')"
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;36m' '2) Standard')"   "$(_c '1;37m' 'Recommended + SSH hardening, Fail2ban, kernel sysctls,')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'AppArmor, password policies.  ~10 steps.  Takes 3-5 min.')"
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;35m' '3) Full')"       "$(_c '1;37m' 'Standard + Tor, IPv6 disable, deep clean.  ~12 steps.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'Most aggressive.  Takes 5-10 min.')"
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;33m' '4) Custom')"     "$(_c '1;37m' 'Choose each step individually.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'Run as: QUICK_MODE=1 bash linuxinstall.sh to skip individual prompts.')"
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;31m' '5) Restore SSH')" "$(_c '1;37m' 'Diagnose & fix common SSH lockout causes. Safe recovery tool.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'Also reinstalls the SSH self-heal watchdog if you want.')"
+  printf '\n'
+  printf '  %s  %s\n' "$(_c '1;1;35m' '6) Maintenance')" "$(_c '1;37m' '20 individual tools: inspect, update, recover, optimize.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'Persistent menu â€” go in and out without restarting.')"
+  printf '\n'
+  printf '  %s\n' "$_hr"
   prompt_choice "Apply which set of categories?" \
     "Recommended (safe, no SSH-lockout risk)" \
     "Standard (includes SSH hardening, Fail2ban, sysctl, AppArmor)" \
@@ -1068,11 +1232,19 @@ ask_profile() {
     "Restore SSH (diagnose & fix common lockout causes; option-only menu)" \
     "Maintenance suite (pick individual categories, return to this menu)"
   REPLY_PROFILE=$REPLY_CHOICE
+  if [ "$QUICK_MODE" = "1" ] && [ "$REPLY_PROFILE" = "4" ]; then
+    info "Quick mode: individual prompts skipped â€” using recommended defaults."
+    info "Override individual steps with STRICT_RUN=1 if needed."
+  fi
 }
 
 ask_category_enabled() {
   local key="$1" desc="$2" default="$3"
   _should_run_step "$key" || return 1
+  # In QUICK_MODE with Custom profile (4), skip individual prompts â€” use defaults.
+  if [ "$QUICK_MODE" = "1" ] && [ "$REPLY_PROFILE" = "4" ]; then
+    [ "$default" = "y" ] && return 0 || return 1
+  fi
   case "$REPLY_PROFILE" in
     1) [ "$default" = "y" ]; return $?;;
     2) [ "$default" = "y" ] || [ "$key" = "ssh" ] || [ "$key" = "fail2ban" ] || [ "$key" = "sysctl" ] || [ "$key" = "pam" ]; return $?;;
@@ -1151,9 +1323,9 @@ _maintenance_list_keys() {
 _maintenance_logs() {
   msg "Recent rollback and self-heal log entries"
   echo
-  if [ -f /var/log/linux-install-rollback.log ]; then
+  if [ -f /var/log/ubuntu-install-rollback.log ]; then
     info "=== Rollback log (last 20 lines) ==="
-    tail -n 20 /var/log/linux-install-rollback.log 2>/dev/null | sed 's/^/  /'
+    tail -n 20 /var/log/ubuntu-install-rollback.log 2>/dev/null | sed 's/^/  /'
   else
     info "Rollback log not found."
   fi
@@ -1187,8 +1359,8 @@ _maintenance_sysinfo() {
 maintenance_menu() {
   local choice rc
   while true; do
-    printf '\n%s\n' "$(_c '1;35m' '━━━ Maintenance suite ━━━')"
-    prompt_choice "Maintenance — pick a category (20=exit)" \
+    printf '\n%s\n' "$(_c '1;35m' 'â”â”â” Maintenance suite â”â”â”')"
+    prompt_choice "Maintenance â€” pick a category (20=exit)" \
       "System update (apt update + upgrade + base packages)" \
       "DNSCrypt (DNS encryption)" \
       "Firewall (UFW)" \
@@ -1297,7 +1469,7 @@ update_kernel() {
   local uname_r
   uname_r="$(uname -r)"
 
-  # ── APT (Debian / Ubuntu / derivatives) ──────────────────────────
+  # â”€â”€ APT (Debian / Ubuntu / derivatives) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if command -v apt >/dev/null 2>&1; then
     info "Package manager: apt ($(lsb_release -ds 2>/dev/null || uname -sr))"
 
@@ -1314,7 +1486,7 @@ update_kernel() {
       ok "Kernel already up to date (running: $uname_r)."
     else
       if [ -n "$cand" ] && [ -n "$installed" ]; then
-        info "  linux-image-generic: ${installed} → ${cand}"
+        info "  linux-image-generic: ${installed} â†’ ${cand}"
       fi
 
       # Disable livepatch so it does not block new kernel activation.
@@ -1326,13 +1498,13 @@ update_kernel() {
       # metapackages, transitional packages, and any kernel-module stubs.
       info "Running apt full-upgrade..."
       if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade; then
-        err "apt full-upgrade failed — existing kernel is untouched."
+        err "apt full-upgrade failed â€” existing kernel is untouched."
         return 1
       fi
       metrics_add pkgs_upgraded 1
     fi
 
-    # ── Prune old kernels ─────────────────────────────────────────
+    # â”€â”€ Prune old kernels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Keep at least 2 kernels (current + one fallback).  Removing
     # only the meta-packages leaves the actual vmlinuz/initrd files
     # dangling, so we target linux-image-* and linux-headers-* directly.
@@ -1364,7 +1536,7 @@ update_kernel() {
       info "  No additional kernels to prune."
     fi
 
-    # ── DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) ──────────────
+    # â”€â”€ DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   elif command -v dnf >/dev/null 2>&1; then
     info "Package manager: dnf"
     if ! run sudo dnf upgrade --refresh -y; then
@@ -1374,7 +1546,7 @@ update_kernel() {
     run sudo dnf autoremove -y
     metrics_add pkgs_upgraded 1
 
-    # ── YUM (legacy CentOS 7 / RHEL 7) ──────────────────────────
+    # â”€â”€ YUM (legacy CentOS 7 / RHEL 7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   elif command -v yum >/dev/null 2>&1; then
     info "Package manager: yum"
     if ! run sudo yum update -y; then
@@ -1384,7 +1556,7 @@ update_kernel() {
     run sudo yum autoremove -y
     metrics_add pkgs_upgraded 1
 
-    # ── Unsupported ───────────────────────────────────────────────
+    # â”€â”€ Unsupported â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   else
     err "No supported package manager (apt/dnf/yum) found."
     return 1
@@ -1399,7 +1571,7 @@ update_kernel() {
   esac
   new_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
   if [ -n "$new_kernel" ] && [ "$new_kernel" != "$uname_r" ]; then
-    ok "Kernel updated: running $uname_r → installed $new_kernel (reboot to activate)."
+    ok "Kernel updated: running $uname_r â†’ installed $new_kernel (reboot to activate)."
     info "  After reboot: uname -r  &&  $verify_cmd"
     _KERNEL_UPDATE_PENDING=1
   else
@@ -1543,7 +1715,7 @@ setup_dnscrypt() {
   # 127.0.0.2:53, the conflict is harmless; but warn if something else
   # is already on 127.0.0.2:53 (rare but possible).
   if _is_listening "53/udp"; then
-    info "Port 53 is already in use on this host — dnscrypt-proxy binds to 127.0.0.2:53 (different IP), so this is usually fine."
+    info "Port 53 is already in use on this host â€” dnscrypt-proxy binds to 127.0.0.2:53 (different IP), so this is usually fine."
     if ss -lnH -u 2>/dev/null | awk '{print $4}' | grep -qE '127\.0\.0\.2:53$'; then
       err "Another process is already listening on 127.0.0.2:53 (udp). dnscrypt-proxy will not start."
       return 1
@@ -1558,10 +1730,10 @@ setup_dnscrypt() {
   if [ ! -f "$_conf" ]; then
     # Neither exists: create the parent dir and write a minimal working config.
     _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
-    info "No config found — generating minimal $_conf"
+    info "No config found â€” generating minimal $_conf"
     run sudo mkdir -p "${_conf%/*}"
     run sudo tee "$_conf" >/dev/null <<'EOF'
-# Minimal dnscrypt-proxy config — auto-generated by linuxinstall.sh
+# Minimal dnscrypt-proxy config â€” auto-generated by linuxinstall.sh
 listen_addresses = ['127.0.0.2:53']
 dnscrypt_proxy_servers
 [static]
@@ -1570,7 +1742,7 @@ dnscrypt_proxy_servers
 EOF
   fi
   if [ ! -f "$_conf" ]; then
-    err "Could not create $_conf — giving up."
+    err "Could not create $_conf â€” giving up."
     return 1
   fi
   if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ]; then
@@ -1609,12 +1781,12 @@ setup_firewall() {
       info "Install firewalld or ufw manually and re-run."
       return 1 ;;
   esac
-  # Ensure the SSH port (whatever it is — 22, 2222, or a custom value)
+  # Ensure the SSH port (whatever it is â€” 22, 2222, or a custom value)
   # is open in BOTH IPv4 and IPv6 before we apply default-deny.
   # This is the single most important anti-lockout call in the script.
   if [ "$USE_REMOTE_SSH" = "yes" ] || [ "$ENV_TYPE" = "server" ]; then
     if ! _ssh_guard; then
-      err "SSH port not guarded — aborting firewall setup to prevent lockout."
+      err "SSH port not guarded â€” aborting firewall setup to prevent lockout."
       return 1
     fi
   fi
@@ -1654,7 +1826,7 @@ setup_tor() {
       "Leave /etc/tor/torrc untouched"
     # Pre-check: warn if common Tor ports are already in use.
     case "$REPLY_CHOICE" in
-      0)  _is_listening 9050 && warn "Port 9050 (Tor SOCKS) is already in use — transparent proxy may conflict." ;;
+      0)  _is_listening 9050 && warn "Port 9050 (Tor SOCKS) is already in use â€” transparent proxy may conflict." ;;
       1|2) _is_listening 9001 && _is_listening 9030 \
               && warn "Ports 9001/9030 (common Tor OR/Dir ports) are already in use." ;;
     esac
@@ -2566,11 +2738,11 @@ run_deepclean() {
   run_remote_script "DeepClean.sh"
 }
 
-# ask_other_scripts() removed — linux repo does not carry ubuntusocks.sh
+# ask_other_scripts() removed â€” linux repo does not carry ubuntusocks.sh
 # or linuxinstallserver.sh. Expand via PR when those are cross-distro-ported.
 
 # --- Rollback mode ---
-# Reads /var/log/linux-install-rollback.log (format: original<TAB>backup)
+# Reads /var/log/ubuntu-install-rollback.log (format: original<TAB>backup)
 # and either dry-prints the inverse `cp` commands or, with --apply, runs
 # them in reverse order so the latest backup wins. Skips entries whose
 # backup no longer exists, logs everything it does.
@@ -2944,7 +3116,7 @@ restore_ssh_mode() {
     done
     if [ "$ak_count" -eq 0 ]; then
       FIXES+=("reenable-password-auth")
-      err "PasswordAuthentication is no AND no pubkeys are installed — you are locked out by OpenSSH."
+      err "PasswordAuthentication is no AND no pubkeys are installed â€” you are locked out by OpenSSH."
     else
       info "PasswordAuthentication is no but $ak_count pubkey(s) are present (OK if you connect via Tailscale SSH or a pubkey-capable client)."
     fi
@@ -2967,9 +3139,9 @@ restore_ssh_mode() {
   fi
 
   # 5) Restore from rollback log if present
-  if [ -f /var/log/linux-install-rollback.log ]; then
+  if [ -f /var/log/ubuntu-install-rollback.log ]; then
     info "Rollback log present:"
-    grep -E 'ssh' /var/log/linux-install-rollback.log 2>/dev/null | sed 's/^/    /' || true
+    grep -E 'ssh' /var/log/ubuntu-install-rollback.log 2>/dev/null | sed 's/^/    /' || true
   fi
 
   # 6) Apply proposed fixes
@@ -3135,7 +3307,7 @@ Usage: sudo bash linuxinstall.sh [--dry-run] [--step STEP] [--restore-ssh] [--re
                     not cover the damage.
                     Usage: sudo bash linuxinstall.sh --restore-etc-snapshot
   --rollback        Dry-prints the inverse cp commands needed to undo
-                    every change recorded in /var/log/linux-install-rollback.log.
+                    every change recorded in /var/log/ubuntu-install-rollback.log.
   --rollback --apply  Run those cp commands (latest backup wins).
   -h, --help        Show this help.
 USAGE
@@ -3154,6 +3326,9 @@ USAGE
 
   detect_or_ask_env
   ask_profile
+  RUN_START_TIME=${SECONDS:-0}
+  print_welcome
+  printf '\n'
 
   # Full + server => run SSH hardening in auto mode (no interactive lockout-prone prompts)
   if [ "$REPLY_PROFILE" = "3" ] && [ "$ENV_TYPE" = "server" ]; then
@@ -3194,19 +3369,58 @@ USAGE
     return $?
   fi
 
-  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; update_kernel; }
-  ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && { mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; }
-  ask_category_enabled "firewall"    "Firewall (UFW)" "y"                      && { mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; }
-  ask_category_enabled "tor"         "Tor daemon" "n"                          && { mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; }
-  ask_category_enabled "ssh"         "SSH hardening (lockout-prone)" "n"       && { mark_step ssh_hardening "running"; show_progress; harden_ssh; mark_step ssh_hardening "done"; }
-  ask_category_enabled "fail2ban"    "Fail2ban" "n"                            && { mark_step fail2ban running; show_progress; setup_fail2ban; mark_step fail2ban done; }
-  ask_category_enabled "unattended"  "Unattended security upgrades" "y"        && { mark_step unattended "running"; show_progress; configure_unattended_upgrades; mark_step unattended "done"; }
-  ask_category_enabled "ipv6"        "Disable IPv6 (risky)" "n"                && { mark_step ipv6 running; show_progress; disable_ipv6; mark_step ipv6 done; }
-  ask_category_enabled "sysctl"      "Kernel/sysctl hardening profile" "n"     && { mark_step sysctl "running"; show_progress; harden_sysctl; mark_step sysctl "done"; }
-  ask_category_enabled "apparmor"    "AppArmor" "n"                            && { mark_step apparmor "running"; show_progress; setup_apparmor; mark_step apparmor "done"; }
-  ask_category_enabled "pam"         "Password & lockout policy" "n"           && { mark_step pam "running"; show_progress; harden_passwords; mark_step pam "done"; }
-  ask_category_enabled "optimize"    "Run OptimizeLinuxASR.sh (new helper)" "n" && { mark_step optimize_asr "running"; show_progress; run_optimize_asr; mark_step optimize_asr "done"; }
-  ask_category_enabled "deepclean"   "Run DeepClean.sh (new helper)" "n"       && { mark_step deepclean "running"; show_progress; run_deepclean; mark_step deepclean "done"; }
+  # Each step shows a one-line preview + elapsed time.  Wrapped in a
+  # function-call so any failure (set -e) stops the whole run, but the
+  # inline `|| { ...; }` shape below keeps set -e OFF for the main flow
+  # so a single failure does not abort subsequent steps.
+  _run_step() {
+    local key="$1" label="$2" preview="$3" fn="$4"
+    if ! ask_category_enabled "$key" "$label" "${5:-n}"; then return 0; fi
+    local p="${_STEP_PREVIEWS[$key]:-$preview}"
+    while true; do
+      _step_begin "$key" "$label" "$p"
+      SECONDS=0
+      local rc=0
+      "$fn" || rc=$?
+      _step_end "$key" "$label"
+      if [ "$rc" -eq 0 ]; then return 0; fi
+      # Failure recovery: offer retry / skip / abort.
+      if _prompt_failure_recovery "$label" "$rc"; then
+        # user picked retry -- loop again
+        continue
+      fi
+      # user picked skip -- mark step as skip so progress bar is honest
+      mark_step "$key" skip
+      return 0
+    done
+  }
+  # System step is special: it always follows with update_kernel so the
+  # new kernel can be detected before the run ends.
+  if ask_category_enabled "system" "System update + base packages" "y"; then
+    while true; do
+      _step_begin "system_update" "System update + base packages" "${_STEP_PREVIEWS[system]}"
+      SECONDS=0
+      local _rc=0
+      update_system || _rc=$?
+      update_kernel || _rc=$?
+      _step_end "system_update" "System update + base packages"
+      if [ "$_rc" -eq 0 ]; then break; fi
+      if _prompt_failure_recovery "System update" "$_rc"; then continue; fi
+      mark_step "system_update" skip; break
+    done
+  fi
+  _run_step dnscrypt     "DNSCrypt (DNS method is ambiguous)"         "" setup_dnscrypt            n
+  _run_step firewall     "Firewall (UFW)"                             "" setup_firewall            y
+  _run_step tor          "Tor daemon"                                 "" setup_tor                 n
+  _run_step ssh          "SSH hardening (lockout-prone)"              "" harden_ssh                n
+  _run_step fail2ban    "Fail2ban"                                   "" setup_fail2ban            n
+  _run_step unattended  "Unattended security upgrades"               "" configure_unattended_upgrades y
+  _run_step ipv6        "Disable IPv6 (risky)"                       "" disable_ipv6              n
+  _run_step sysctl      "Kernel/sysctl hardening profile"            "" harden_sysctl             n
+  _run_step apparmor    "AppArmor"                                   "" setup_apparmor            n
+  _run_step pam         "Password & lockout policy"                  "" harden_passwords          n
+  _run_step optimize_asr "Run OptimizeLinuxASR.sh (new helper)"       "" run_optimize_asr         n
+  _run_step deepclean   "Run DeepClean.sh (new helper)"              "" run_deepclean            n
 
   if [ "$USE_REMOTE_SSH" = "yes" ]; then
     info "Because SSH was changed, verify a SECOND session can log in BEFORE closing this one."
@@ -3221,9 +3435,22 @@ USAGE
 # Common end-of-run summary: print metrics and exit with the right code
 # under STRICT_RUN. Non-strict runs always exit 0 (interactive default).
 _print_run_summary() {
-  bold "Done."
   mark_step summary "running"
   show_progress
+  local total_sec=$(( SECONDS - RUN_START_TIME ))
+  local total_min=$(( total_sec / 60 ))
+  local total_rem=$(( total_sec % 60 ))
+  local total_time_str
+  if [ "$total_min" -gt 0 ]; then
+    total_time_str="${total_min}m ${total_rem}s"
+  else
+    total_time_str="${total_sec}s"
+  fi
+  local _hr="â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+  printf '\n%s\n' "$(_c '1;36m' "  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")"
+  printf '%s\n' "$(_c '1;36m' "  â•‘               âœ“  Run complete  â€”  $total_time_str                 â•‘")"
+  printf '%s\n' "$(_c '1;36m' "  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")"
+  printf '\n'
   print_metrics_summary
   mark_step summary "done"
   show_progress
@@ -3233,17 +3460,17 @@ _print_run_summary() {
     printf '  Restore whole /etc:  sudo bash %q --restore-etc-snapshot\n' "$SCRIPT_PATH"
   fi
   # If update_kernel staged a new image, offer a reboot once we are
-  # back at the prompt. Never auto-reboot — connection loss during the
+  # back at the prompt. Never auto-reboot â€” connection loss during the
   # rest of the run is the bigger risk.
   if [ "${_KERNEL_UPDATE_PENDING:-0}" = "1" ]; then
-    printf '\n  %s\n' "$(_c '1;33m' '━━━ KERNEL REBOOT REQUIRED━━━')"
+    printf '\n  %s\n' "$(_c '1;33m' 'â”â”â” KERNEL REBOOT REQUIREDâ”â”â”')"
     printf '%s\n' "  A new kernel is installed but not yet running."
     printf '  Currently running: %s\n' "$(_c '1;37m' "$(uname -r)")"
     local _boot_kernel
     _boot_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
     printf '  Highest installed: %s\n' "$(_c '1;37m' "${_boot_kernel:-unknown}")"
     if [ -t 0 ] && prompt_yn "Reboot now to activate the new kernel?" "n"; then
-      warn "Rebooting in 5 seconds — Ctrl-C to cancel."
+      warn "Rebooting in 5 seconds â€” Ctrl-C to cancel."
       sleep 5
       run sudo systemctl reboot
     else
@@ -3255,7 +3482,7 @@ _print_run_summary() {
   # that a check is scheduled at every boot and every minute -- so even a
   # full-disconnect lockout will recover automatically.
   if [ "${_SELF_HEAL_INSTALLED:-0}" = "1" ]; then
-    printf '\n  %s\n' "$(_c '1;36m' '━━━ SSH SELF-HEAL GUARD ARMED ━━━')"
+    printf '\n  %s\n' "$(_c '1;36m' 'â”â”â” SSH SELF-HEAL GUARD ARMED â”â”â”')"
     if [ -f /etc/systemd/system/neohiro-ssh-watchdog.timer ]; then
       printf '%s\n' "  An SSH self-heal run is scheduled at every reboot and every 60s."
       printf '  Watchdog: %s\n' "$(_c '1;37m' 'systemd timer neohiro-ssh-watchdog.timer')"

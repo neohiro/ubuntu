@@ -93,7 +93,7 @@ backed up, approximate disk freed). Every config file it modifies is
 copied to a timestamped backup and appended to a single log:
 
 ```bash
-cat /var/log/linux-install-rollback.log
+cat /var/log/ubuntu-install-rollback.log
 # format: original_path<TAB>backup_path
 # restore any file with: sudo cp <backup_path> <original_path>
 ```
@@ -115,11 +115,11 @@ reload, SSH restart, etc.)** copy this line — you'll need it to re-attach
 after a disconnect:
 
 ```bash
-tmux attach -t linux-setup
+tmux attach -t ubuntu-setup
 ```
 
 If you were disconnected entirely, log back in over SSH and run
-`tmux attach -t linux-setup` to rejoin the session. If you started the
+`tmux attach -t ubuntu-setup` to rejoin the session. If you started the
 one-liner from a local terminal (not over SSH), the tmux wrap is skipped
 automatically and there's nothing to re-attach to. When the script
 finishes successfully, the tmux session closes itself; if it fails, the

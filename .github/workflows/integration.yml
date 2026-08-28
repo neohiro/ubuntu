@@ -98,17 +98,21 @@ DOCKERFILE
           # Use expect to drive the Maintenance menu.  QUIET_PROMPTS=1 silences
           # the "not a TTY" warnings from every prompt; STRICT_RUN=1 ensures
           # the runner exits non-zero if any action fails.
+          #
+          # Profile indexing is 1-based:
+          #   1 = Recommended, 2 = Standard, 3 = Full, 4 = Custom,
+          #   5 = Restore SSH (new, above Maintenance), 6 = Maintenance
+          # Maintenance submenu is 1-based with 20 options (20 = back).
           docker run --rm -i ubuntu-install-test \
             env QUIET_PROMPTS=1 \
             expect -c '
               set timeout 120
               log_user 1
               spawn bash ubuntuinstall.sh
-              # No SSH session so USE_REMOTE_SSH defaults to no (prompt skipped)
               expect "Apply which set of categories"
-              send "4\r"
-              expect "Maintenance suite"
-              send "15\r"  ;# option 15 = Back to main menu (1-indexed)
+              send "6\r"
+              expect "Maintenance"
+              send "20\r"
               expect eof
               catch wait result
               exit [lindex $result 3]

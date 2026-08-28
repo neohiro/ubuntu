@@ -9,10 +9,41 @@
 #
 
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/ubuntu/main}"
-TMP_DIR="$(mktemp -d)"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 ORIG_CWD="$(pwd)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Canonical helpers (lib/color.sh + lib/temp.sh). Falls back inline
+# when run via curl|bash (lib not on disk).
+_NEOHIRO_LIB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo /usr/local/bin)")/lib" 2>/dev/null && pwd || echo "")"
+if [ -n "$_NEOHIRO_LIB_DIR" ] && [ -r "$_NEOHIRO_LIB_DIR/color.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$_NEOHIRO_LIB_DIR/color.sh"
+  # shellcheck disable=SC1091
+  source "$_NEOHIRO_LIB_DIR/temp.sh"
+else
+  USE_COLOR=1
+  if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ] || [ "${TERM:-}" = "dumb" ]; then USE_COLOR=0; fi
+  _c() { if [ "$USE_COLOR" = "1" ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi; }
+  bold() { printf "%s\n" "$(_c '1m' "$*")"; }
+  warn() { printf "%s %s\n" "$(_c '1;33m' '[WARNING]')" "$*" >&2; }
+  err()  { printf "%s %s\n" "$(_c '1;31m' '[ERROR]')"   "$*" >&2; }
+  ok()   { printf "%s %s\n" "$(_c '1;32m' '[OK]')"      "$*"; }
+  info() { printf "  %s\n" "$*"; }
+  msg()  { echo "=> $*"; }
+  TMP_DIR="$(mktemp -d)"
+  _TMP_FILES=()
+  if [ "${STRICT_RUN:-0}" = "1" ] || [ -n "${CI:-}" ]; then
+    trap 'rm -rf "$TMP_DIR" "${_TMP_FILES[@]}" 2>/dev/null' ERR
+  fi
+  trap 'rm -rf "$TMP_DIR" "${_TMP_FILES[@]}" 2>/dev/null' EXIT
+  _tmpfile() {
+    local f
+    f=$(mktemp "${TMPDIR:-/tmp}/neohiro.XXXXXX")
+    _TMP_FILES+=("$f")
+    printf '%s' "$f"
+  }
+fi
+unset _NEOHIRO_LIB_DIR
 
 RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
 ROLLBACK_LOG="${ROLLBACK_LOG:-/var/log/ubuntu-install-rollback.log}"

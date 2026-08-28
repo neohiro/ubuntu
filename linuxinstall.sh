@@ -1682,7 +1682,7 @@ setup_authorized_keys_with_validation() {
   printf '\n'
   _c '1;33m' "----------------------------------------------------------------------"
   printf ''
-  printf "\033[1;33m──────────────────────────────────────────────────────────────────────\033[0m"
+  printf "%s" "$(_c '1;33m' '----------------------------------------------------------------------')"
   printf "> "
 
   local pasted_key="" line
@@ -2434,9 +2434,9 @@ _print_run_summary() {
   # back at the prompt. Never auto-reboot — connection loss during the
   # rest of the run is the bigger risk.
   if [ "${_KERNEL_UPDATE_PENDING:-0}" = "1" ]; then
-    printf '\n  \033[1;33m━━━ KERNEL REBOOT REQUIRED\033[0m\n'
+    printf '\n  %s\n' "$(_c '1;33m' '━━━ KERNEL REBOOT REQUIRED━━━')"
     printf '%s\n' "  A new kernel is installed but not yet running."
-    printf '  Currently running: \033[1;37m%s\033[0m\n' "$(uname -r)"
+    printf '  Currently running: %s\n' "$(_c '1;37m' "$(uname -r)")"
     local _boot_kernel
     _boot_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
     printf '  Highest installed: %s\n' "$(_c '1;37m' "${_boot_kernel:-unknown}")"

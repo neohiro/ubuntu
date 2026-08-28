@@ -543,12 +543,11 @@ fw_default_incoming_deny() {
     firewall-cmd)
       local zone
       zone=$(sudo firewall-cmd --get-default-zone 2>/dev/null || echo public)
-      # Permit SSH and DHCPv6 in the active zone BEFORE switching the default
-      # zone to drop, otherwise the active interface's ruleset (which still
-      # has the old zone) is fine, but new interfaces get drop and the next
-      # firewall-cmd --reload re-evaluates from default. So we also switch
-      # the runtime default and rebind active interfaces to drop after
-      # whitelisting ssh on the new default zone.
+      # Allow SSH and DHCPv6 in the current default zone before flipping the
+      # default, then add the same services to the drop zone and rebind active
+      # interfaces to drop. This closes the gap where --set-default-zone only
+      # affects interfaces bound AFTER the change; the live ones stay on the
+      # legacy zone otherwise.
       run sudo firewall-cmd --zone="$zone" --add-service=ssh --permanent
       run sudo firewall-cmd --zone="$zone" --add-service=dhcpv6-client --permanent
       # Make the drop zone the new permanent + runtime default.
@@ -560,9 +559,12 @@ fw_default_incoming_deny() {
       run sudo firewall-cmd --zone=drop --add-service=dhcpv6-client --permanent
       # Rebind active interfaces so they all live under the drop zone, not the
       # old public zone. awk extracts interface names from the "interfaces:" lines.
+      # Skip loopback (firewalld refuses to reassign lo, and it is always trusted
+      # by the kernel regardless of zone).
       local iface
       for iface in $(sudo firewall-cmd --get-active-zones 2>/dev/null \
-                       | awk '/^  interfaces: / {for(i=2;i<=NF;i++) print $i}'); do
+                       | awk '/^  interfaces: / {for(i=2;i<=NF;i++) print $i}' \
+                       | grep -v '^lo$\|^lo[0-9]'); do
         run sudo firewall-cmd --zone=drop --change-interface="$iface" --permanent
       done
       ;;

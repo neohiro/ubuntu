@@ -1,4 +1,4 @@
-﻿﻿#!/bin/bash
+#!/bin/bash
 #
 # DEPRECATED: This script is deprecated. Use neohiro/linux (linuxinstall.sh) instead.
 #   curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh | bash

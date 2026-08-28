@@ -89,8 +89,11 @@ rollback_mode() {
 F="$WD/sshd_test"
 : > "$F"
 _set_or_append_sshd_config "Port" "22" "$F"
-grep -qx "Port 22" "$F" && ok_t "_set_or_append: append when missing" \
-  || fail_t "_set_or_append: append when missing" "$(cat "$F")"
+if grep -qx "Port 22" "$F"; then
+  ok_t "_set_or_append: append when missing"
+else
+  fail_t "_set_or_append: append when missing" "$(cat "$F")"
+fi
 
 # Replace when present
 echo "Port 2222" >> "$F"
@@ -99,44 +102,45 @@ _set_or_append_sshd_config "Port" "22" "$F"
 # (The function does NOT dedup with already-matching "Port 22" — that's
 # a separate concern outside its responsibility. The test only checks
 # the rewrite happened.)
-grep -qx "Port 2222" "$F" && fail_t "_set_or_append: replace existing" \
-  "Port 2222 still present: $(cat "$F")" \
-  || ok_t "_set_or_append: replace existing"
+if grep -qx "Port 2222" "$F"; then
+  fail_t "_set_or_append: replace existing" "Port 2222 still present: $(cat "$F")"
+else
+  ok_t "_set_or_append: replace existing"
+fi
 
 # Idempotent: re-applying same value leaves the file unchanged in content
 BEFORE=$(cat "$F")
 _set_or_append_sshd_config "Port" "22" "$F"
 AFTER=$(cat "$F")
-if [ "_set_or_append: idempotent" = "before=$BEFORE after=$AFTER" ]; then
-  ok_t ""
+if [ "$BEFORE" = "$AFTER" ]; then
+  ok_t "_set_or_append: idempotent (no-op on same value)"
 else
   fail_t "_set_or_append: idempotent" "before=$BEFORE after=$AFTER"
 fi
 
 _set_or_append_sshd_config "Banner" "/etc/issue.net" "$F"
-grep -qx "Banner /etc/issue.net" "$F" && ok_t "_set_or_append: value with spaces" \
-  || fail_t "_set_or_append: value with spaces" "$(cat "$F")"
-
-# Drop-in: when the directive exists in a drop-in dir, edit the drop-in
-# (so the most-specific setting wins). We use the test work dir as a fake
-# /etc/ssh/sshd_config.d so we don't need root.
-DROP="$WD/sshd_dropin"; : > "$DROP"
-echo "Port 2222" > "$DROP"
-# Fake the drop-in path by setting it in the grep expansion below.
-_set_or_append_sshd_config "Port" "22" "$F" >/dev/null 2>&1
-# The real function looks for /etc/ssh/sshd_config.d/*.conf which doesn't exist
-# on Windows, so it edits the main file. We test the logic by verifying that
-# the replacement was done (Port 2222 is gone).
-if grep _set_or_append: drops duplicate directive "cat "$F"" ""; then
-  ok_t ""
+if grep -qx "Banner /etc/issue.net" "$F"; then
+  ok_t "_set_or_append: value with spaces"
 else
-  fail_t "_set_or_append: drops duplicate directive" "$(cat "$F")""
+  fail_t "_set_or_append: value with spaces" "$(cat "$F")"
+fi
+
+# Drop-in: the real function looks for /etc/ssh/sshd_config.d/*.conf which
+# doesn't exist in CI, so it edits the main file. We just verify that running
+# the function again on the same value leaves the file with exactly one Port
+# directive (no duplicate added).
+_set_or_append_sshd_config "Port" "22" "$F" >/dev/null 2>&1
+PORT_COUNT=$(grep -cE '^[[:space:]]*Port[[:space:]]' "$F")
+if [ "$PORT_COUNT" -eq 1 ] && grep -qx "Port 22" "$F"; then
+  ok_t "_set_or_append: no duplicate Port directive after re-apply"
+else
+  fail_t "_set_or_append: no duplicate Port directive" "count=$PORT_COUNT content=$(cat "$F")"
 fi
 
 # --- record_backup ---
 record_backup "/etc/foo.conf" "$WD/foo.bak"
 record_backup "/etc/bar.conf" "$WD/bar.bak"
-if grep -qP $'\t' "$ROLLBACK_LOG"; then
+if grep -qF $'\t' "$ROLLBACK_LOG"; then
   ok_t "record_backup: TAB-separated format"
 else
   fail_t "record_backup: TAB-separated format" "$(cat "$ROLLBACK_LOG")"
@@ -149,15 +153,16 @@ echo "Port 2222" > "$F2"
 echo "Port 22"   > "$WD/sshd_test2.bak"
 printf '%s\t%s\n' "$F2" "$WD/sshd_test2.bak" > "$ROLLBACK_LOG"
 rollback_mode >/dev/null 2>&1
-if grep rollback_mode: dry-run does not modify file "cat "$F2"" ""; then
-  ok_t ""
+# After dry-run, F2 should still be "Port 2222" (unchanged)
+if grep -qx "Port 2222" "$F2"; then
+  ok_t "rollback_mode: dry-run does not modify file"
 else
-  fail_t "rollback_mode: dry-run does not modify file" "$(cat "$F2")""
+  fail_t "rollback_mode: dry-run does not modify file" "got: $(cat "$F2")"
 fi
 
 # --- rollback_mode: --apply restores from backup ---
 rollback_mode --apply >/dev/null 2>&1
-if grep -q "Port 22" "$F2" && ! grep -q "Port 2222" "$F2"; then
+if grep -qx "Port 22" "$F2" && ! grep -q "Port 2222" "$F2"; then
   ok_t "rollback_mode: --apply restores from backup"
 else
   fail_t "rollback_mode: --apply restores from backup" "$(cat "$F2")"
@@ -172,10 +177,11 @@ echo "Port 300" > "$WD/sshd_test3.bak.2"
 printf '%s\t%s\n' "$F3" "$WD/sshd_test3.bak.1" > "$ROLLBACK_LOG"
 printf '%s\t%s\n' "$F3" "$WD/sshd_test3.bak.2" >> "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-if grep rollback_mode: latest backup wins "cat "$F3"" ""; then
-  ok_t ""
+# Latest backup (bak.2, "Port 300") should win
+if grep -qx "Port 300" "$F3"; then
+  ok_t "rollback_mode: latest backup wins"
 else
-  fail_t "rollback_mode: latest backup wins" "$(cat "$F3")""
+  fail_t "rollback_mode: latest backup wins" "got: $(cat "$F3")"
 fi
 
 # --- rollback_mode: malformed-line tolerance ---
@@ -185,10 +191,11 @@ echo "Port 9999" > "$F4"
 echo "Port 77"   > "$WD/sshd_test4.bak"
 printf "comment\n\nno-tab-here\n%s\t%s\n" "$F4" "$WD/sshd_test4.bak" > "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-if grep rollback_mode: ignores malformed lines "cat "$F4"" ""; then
-  ok_t ""
+# Malformed lines skipped, the one valid tab-pair restores from bak
+if grep -qx "Port 77" "$F4"; then
+  ok_t "rollback_mode: ignores malformed lines"
 else
-  fail_t "rollback_mode: ignores malformed lines" "$(cat "$F4")""
+  fail_t "rollback_mode: ignores malformed lines" "got: $(cat "$F4")"
 fi
 
 # --- rollback_mode: missing backup skipped gracefully ---
@@ -197,26 +204,32 @@ F5="$WD/sshd_test5"
 echo "Port AAA" > "$F5"
 printf '%s\t%s\n' "$F5" "$WD/nonexistent_backup.bak" > "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-if grep rollback_mode: missing backup skips "cat "$F5"" ""; then
-  ok_t ""
+# Missing backup file: F5 should be unchanged
+if grep -qx "Port AAA" "$F5"; then
+  ok_t "rollback_mode: missing backup skips (target file untouched)"
 else
-  fail_t "rollback_mode: missing backup skips" "$(cat "$F5")""
+  fail_t "rollback_mode: missing backup skips" "got: $(cat "$F5")"
 fi
 
 # --- STRICT_RUN=0: run() always returns 0 even on failure ---
 _FAIL_COUNT=0; STRICT_RUN=0
 run_strict() { run() { msg "$*"; "$@"; local rc=$?; if [ $rc -ne 0 ]; then _FAIL_COUNT=$((_FAIL_COUNT+1)); fi; if [ "$STRICT_RUN" = "1" ]; then return $rc; fi; return 0; }; }
 run_strict
-# Capture a failing command
 run false 2>/dev/null; rc=$?
-[ "$rc" -eq 0 ] && [ "$_FAIL_COUNT" -eq 1 ] && ok_t "STRICT_RUN=0: run() returns 0, _FAIL_COUNT incremented" \
-  || fail_t "STRICT_RUN=0: run() returns 0" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+if [ "$rc" -eq 0 ] && [ "$_FAIL_COUNT" -eq 1 ]; then
+  ok_t "STRICT_RUN=0: run() returns 0, _FAIL_COUNT incremented"
+else
+  fail_t "STRICT_RUN=0: run() returns 0" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+fi
 
 # --- STRICT_RUN=1: run() returns actual exit code ---
 _FAIL_COUNT=0; STRICT_RUN=1
 run false 2>/dev/null; rc=$?
-[ "$rc" -eq 1 ] && [ "$_FAIL_COUNT" -eq 1 ] && ok_t "STRICT_RUN=1: run() returns actual exit code, _FAIL_COUNT incremented" \
-  || fail_t "STRICT_RUN=1: run() returns actual exit code" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+if [ "$rc" -eq 1 ] && [ "$_FAIL_COUNT" -eq 1 ]; then
+  ok_t "STRICT_RUN=1: run() returns actual exit code, _FAIL_COUNT incremented"
+else
+  fail_t "STRICT_RUN=1: run() returns actual exit code" "rc=$rc _FAIL_COUNT=$_FAIL_COUNT"
+fi
 
 # --- _take_etc_snapshot: creates snapshot in tmp dir, respects ENABLE_ETC_SNAPSHOT=0 ---
 TAKE_OUT=""

@@ -1,4 +1,4 @@
-﻿﻿﻿name: Integration Tests
+name: Integration Tests
 
 # shellcheck excludes: SC1091 (sourced file not found - we run shellcheck without following curl|bash sources), SC2046 (legitimate word-splitting in our context), SC2034 (assigned-but-unused placeholder for future flags).
 

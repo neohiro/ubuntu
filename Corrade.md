@@ -1,4 +1,4 @@
-﻿# Corrade
+# Corrade
 
 A [Corrade](https://grimore.org/corrade) is a metaverse bot / virtual-world grid
 service (used for Second Life, OpenSim, and similar grids). This helper is

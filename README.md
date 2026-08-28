@@ -1,8 +1,8 @@
-﻿﻿# neohiro/ubuntu
+# neohiro/ubuntu
 
-> **Note:** This repository now ships `linuxinstall.sh` as the canonical
-> cross-distro script. The legacy `ubuntuinstall.sh` is kept as an alias
-> for old `curl` one-liners. Prefer the new name going forward.
+> **Deprecated:** Continued development is now at [neohiro/linux](https://github.com/neohiro/linux).
+> This repo ships both `linuxinstall.sh` (canonical cross-distro script) and
+> `ubuntuinstall.sh` (legacy Ubuntu-only alias). New features go to neohiro/linux.
 
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
 [![Supported distros](https://img.shields.io/badge/distros-Ubuntu%20%7C%20Debian%20%7C%20RHEL%20%7C%20Fedora%20%7C%20SUSE%20%7C%20Arch-blue.svg)](#supported-distributions)

@@ -1,4 +1,7 @@
-#!/bin/bash
+﻿﻿#!/bin/bash
+#
+# DEPRECATED: This script is deprecated. Use neohiro/linux (linuxinstall.sh) instead.
+#   curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh | bash
 #
 # Script to automate Ubuntu setup and hardening based on neohiro/ubuntu
 #
@@ -144,7 +147,9 @@ disable_ipv6() {
   # should understand the implications before doing this.
   run sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
   run sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
-  run sudo sed -i '$a\net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' /etc/sysctl.conf
+  run sudo sed -i '$a
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1' /etc/sysctl.conf
   msg "IPv6 disabled.  Reboot may be required for full effect."
 }
 
@@ -174,7 +179,8 @@ set_secure_permissions() {
 configure_unattended_upgrades() {
     msg "Configuring unattended upgrades..."
     run sudo apt-get install -y unattended-upgrades
-    run sudo dpkg-reconfigure --priority=low unattended-upgrades
+    echo unattended-upgrades unattended-upgrades/enable_auto_updates boolean true | sudo debconf-set-selections
+    run sudo systemctl enable unattended-upgrades
     # Enable automatic updates
     run sudo sed -i 's/^\/\/Unattended-Upgrade::Allowed-Origins/Unattended-Upgrade::Allowed-Origins/' /etc/apt/apt.conf.d/50unattended-upgrades
     run sudo sed -i 's/^Unattended-Upgrade::Automatic-Update \"0\";/Unattended-Upgrade::Automatic-Update \"1\";/' /etc/apt/apt.conf.d/20auto-upgrades

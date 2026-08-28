@@ -107,8 +107,11 @@ grep -qx "Port 2222" "$F" && fail_t "_set_or_append: replace existing" \
 BEFORE=$(cat "$F")
 _set_or_append_sshd_config "Port" "22" "$F"
 AFTER=$(cat "$F")
-[ "$BEFORE" = "$AFTER" ] && ok_t "_set_or_append: idempotent (no-op on same value)" \
-  || fail_t "_set_or_append: idempotent" "before=$BEFORE after=$AFTER"
+if [ "_set_or_append: idempotent" = "before=$BEFORE after=$AFTER" ]; then
+  ok_t ""
+else
+  fail_t "_set_or_append: idempotent" "before=$BEFORE after=$AFTER"
+fi
 
 _set_or_append_sshd_config "Banner" "/etc/issue.net" "$F"
 grep -qx "Banner /etc/issue.net" "$F" && ok_t "_set_or_append: value with spaces" \
@@ -124,8 +127,11 @@ _set_or_append_sshd_config "Port" "22" "$F" >/dev/null 2>&1
 # The real function looks for /etc/ssh/sshd_config.d/*.conf which doesn't exist
 # on Windows, so it edits the main file. We test the logic by verifying that
 # the replacement was done (Port 2222 is gone).
-! grep -q "Port 2222" "$F" && ok_t "_set_or_append: drops duplicate directive (single file)" \
-  || fail_t "_set_or_append: drops duplicate directive" "$(cat "$F")"
+if grep _set_or_append: drops duplicate directive "cat "$F"" ""; then
+  ok_t ""
+else
+  fail_t "_set_or_append: drops duplicate directive" "$(cat "$F")""
+fi
 
 # --- record_backup ---
 record_backup "/etc/foo.conf" "$WD/foo.bak"
@@ -143,8 +149,11 @@ echo "Port 2222" > "$F2"
 echo "Port 22"   > "$WD/sshd_test2.bak"
 printf '%s\t%s\n' "$F2" "$WD/sshd_test2.bak" > "$ROLLBACK_LOG"
 rollback_mode >/dev/null 2>&1
-grep -q "Port 2222" "$F2" && ok_t "rollback_mode: dry-run does not modify file" \
-  || fail_t "rollback_mode: dry-run does not modify file" "$(cat "$F2")"
+if grep rollback_mode: dry-run does not modify file "cat "$F2"" ""; then
+  ok_t ""
+else
+  fail_t "rollback_mode: dry-run does not modify file" "$(cat "$F2")""
+fi
 
 # --- rollback_mode: --apply restores from backup ---
 rollback_mode --apply >/dev/null 2>&1
@@ -163,8 +172,11 @@ echo "Port 300" > "$WD/sshd_test3.bak.2"
 printf '%s\t%s\n' "$F3" "$WD/sshd_test3.bak.1" > "$ROLLBACK_LOG"
 printf '%s\t%s\n' "$F3" "$WD/sshd_test3.bak.2" >> "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-grep -q "Port 300" "$F3" && ok_t "rollback_mode: latest backup wins" \
-  || fail_t "rollback_mode: latest backup wins" "$(cat "$F3")"
+if grep rollback_mode: latest backup wins "cat "$F3"" ""; then
+  ok_t ""
+else
+  fail_t "rollback_mode: latest backup wins" "$(cat "$F3")""
+fi
 
 # --- rollback_mode: malformed-line tolerance ---
 F4="$WD/sshd_test4"
@@ -173,8 +185,11 @@ echo "Port 9999" > "$F4"
 echo "Port 77"   > "$WD/sshd_test4.bak"
 printf "comment\n\nno-tab-here\n%s\t%s\n" "$F4" "$WD/sshd_test4.bak" > "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-grep -q "Port 77" "$F4" && ok_t "rollback_mode: ignores malformed lines" \
-  || fail_t "rollback_mode: ignores malformed lines" "$(cat "$F4")"
+if grep rollback_mode: ignores malformed lines "cat "$F4"" ""; then
+  ok_t ""
+else
+  fail_t "rollback_mode: ignores malformed lines" "$(cat "$F4")""
+fi
 
 # --- rollback_mode: missing backup skipped gracefully ---
 F5="$WD/sshd_test5"
@@ -182,8 +197,11 @@ F5="$WD/sshd_test5"
 echo "Port AAA" > "$F5"
 printf '%s\t%s\n' "$F5" "$WD/nonexistent_backup.bak" > "$ROLLBACK_LOG"
 rollback_mode --apply >/dev/null 2>&1
-grep -q "Port AAA" "$F5" && ok_t "rollback_mode: missing backup skips without error" \
-  || fail_t "rollback_mode: missing backup skips" "$(cat "$F5")"
+if grep rollback_mode: missing backup skips "cat "$F5"" ""; then
+  ok_t ""
+else
+  fail_t "rollback_mode: missing backup skips" "$(cat "$F5")""
+fi
 
 # --- STRICT_RUN=0: run() always returns 0 even on failure ---
 _FAIL_COUNT=0; STRICT_RUN=0

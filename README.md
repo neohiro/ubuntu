@@ -1,4 +1,4 @@
-# neohiro/ubuntu
+﻿﻿# neohiro/ubuntu
 
 > **Note:** This repository now ships `linuxinstall.sh` as the canonical
 > cross-distro script. The legacy `ubuntuinstall.sh` is kept as an alias
@@ -42,12 +42,39 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 
 > Review it first:
 > `curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh | less`
+**Profiles:** the script asks which profile to apply - pick the trade-off that matches your risk tolerance:
 
-**Profiles:** the script asks which profile to apply — Recommended (safe),
-Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/
-DeepClean), or Custom (you confirm every step). Risky actions (SSH
-hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt
-individually before touching anything.
+| Profile    | What runs                                                                 | What is skipped                                  | Best for                          | Risk |
+|------------|---------------------------------------------------------------------------|---------------------------------------------------|-----------------------------------|------|
+| Recommended| DNS encryption, firewall, fail2ban, unattended-upgrades, sysctl, AppArmor, password quality/lockout | SSH hardening, Tor, IPv6 disable, ASR, DeepClean | First run / new boxes            | Low  |
+| Standard   | Recommended + SSH key-only auth, /etc snapshot                            | Tor, IPv6 disable, ASR, DeepClean                 | Most desktops and servers        | Low  |
+| Full       | Everything (Tor transparent proxy, IPv6 disable, ASR, DeepClean)          | -                                                 | Power users / single-user boxes  | Med  |
+| Custom     | You confirm every step individually                                       | -                                                 | Experts who know what they want  | Varies |
+| Maintenance| Re-runs ASR + DeepClean on demand                                         | Setup steps                                       | Ongoing system maintenance        | Low  |
+
+Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
+
+### Environment variables
+
+Control script behaviour without editing the source:
+
+| Variable                | Values                       | Default    | Effect                                                 |
+|------------------------|------------------------------|------------|--------------------------------------------------------|
+| `NEOSIGN_GPG_LEVEL`    | `off` `advisory` `required` | `off`      | GPG verification of fetched sub-scripts               |
+| `NEOSIGN_GPG_FPR`      | 40-hex fingerprint           | -          | Expected signing key fingerprint                        |
+| `STRICT_RUN`           | `0` `1`                     | `0`        | `1`: abort entire run on first command failure         |
+| `QUIET_PROMPTS`        | `0` `1`                     | `0`        | `1`: auto-confirm non-risky defaults                  |
+| `ENABLE_ETC_SNAPSHOT`  | `0` `1`                     | `1`        | `0`: skip `/etc` snapshot before changes               |
+| `TOR_NICK`             | string                       | auto       | Relay nickname (Full profile)                         |
+| `TOR_CONTACT`          | email or string              | -          | Relay contact info                                    |
+| `TOR_BANDWIDTH_RATE`   | bytes (e.g. `10 MB`)        | `100 MB`   | Relay bandwidth limit                                 |
+| `TOR_BANDWIDTH_BURST`  | bytes                        | `200 MB`   | Relay burst bandwidth                                 |
+| `TOR_ACCOUNTING_MAX`    | bytes (e.g. `200 GB`)       | unlimited  | Monthly traffic cap (triggers hard hibernation)        |
+
+Example:
+```bash
+sudo STRICT_RUN=1 ENABLE_ETC_SNAPSHOT=0 QUIET_PROMPTS=1 bash ubuntuinstall.sh
+```
 
 **Full profile on a server runs in "auto" mode:** SSH hardening is applied
 without the interactive lockout-prone prompts (it never disables

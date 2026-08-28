@@ -1,6 +1,4 @@
-﻿name: Integration Tests
-
-# shellcheck excludes: SC1091 (sourced file not found - we run shellcheck without following curl|bash sources), SC2046 (legitimate word-splitting in our context), SC2034 (assigned-but-unused placeholder for future flags).
+name: Integration Tests
 
 on:
   push:
@@ -19,23 +17,23 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null 2>&1 || true
           set -e
           find . -name '*.sh' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
-            echo "=== $f ==="
+            echo "=== ${f} ==="
             shellcheck --severity=warning \
               --exclude=SC1091,SC2046,SC2034 \
-              "$f"
+              "${f}"
           done
           echo "All shellcheck passes."
       - name: bash -n syntax check
         run: |
           set -e
           find . -name '*.sh' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
-            echo "  $f: syntax OK"
-            bash -n "$f"
+            echo "  ${f}: syntax OK"
+            bash -n "${f}"
           done
           echo "All syntax checks pass."
 
   docker-recommended:
-    name: Docker Î“Ã‡Ã¶ Recommended flow
+    name: Docker - Recommended flow
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,10 +52,6 @@ DOCKERFILE
           docker run --rm -i ubuntu-install-test \
             env QUIET_PROMPTS=1 STRICT_RUN=1 \
             bash -c '
-              # In Docker (no TTY, no SSH session, server auto-detected):
-              # All prompt_yn/prompt_choice fall back to defaults. Under
-              # STRICT_RUN=1 the script will exit non-zero on any partial
-              # failure, which surfaces real bugs in the runner.
               printf "\n\n\n\n\n" | \
                 bash ubuntuinstall.sh 2>&1 | tee /tmp/install-log.txt; rc=$?
               echo "EXIT_CODE=$rc" >> /tmp/install-log.txt
@@ -70,7 +64,6 @@ DOCKERFILE
           tail -60 /tmp/docker-recommended.txt || true
           echo "=== Exit code: $ec ==="
           if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
-          # Verify rollback log was created
           if grep -q "EXIT_CODE=0" /tmp/docker-recommended.txt; then
             echo "PASS: script exited cleanly."
           else
@@ -79,11 +72,11 @@ DOCKERFILE
           fi
 
   docker-maintenance:
-    name: Docker Î“Ã‡Ã¶ Maintenance suite
+    name: Docker - Maintenance suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run Maintenance suite (profile 4, Back) in Docker
+      - name: Run Maintenance suite in Docker
         run: |
           docker build -t ubuntu-install-test -f - . <<'DOCKERFILE'
 FROM ubuntu:22.04
@@ -95,14 +88,6 @@ RUN apt-get update -qq && \
 WORKDIR /workspace
 COPY . /workspace
 DOCKERFILE
-          # Use expect to drive the Maintenance menu.  QUIET_PROMPTS=1 silences
-          # the "not a TTY" warnings from every prompt; STRICT_RUN=1 ensures
-          # the runner exits non-zero if any action fails.
-          #
-          # Profile indexing is 1-based:
-          #   1 = Recommended, 2 = Standard, 3 = Full, 4 = Custom,
-          #   5 = Restore SSH (new, above Maintenance), 6 = Maintenance
-          # Maintenance submenu is 1-based with 20 options (20 = back).
           docker run --rm -i ubuntu-install-test \
             env QUIET_PROMPTS=1 \
             expect -c '
@@ -121,7 +106,6 @@ DOCKERFILE
           tail -40 /tmp/docker-maintenance.txt || true
           echo "=== Exit code: $ec ==="
           if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
-          # Expect exits 0 if the script exits 0
           if [ "$ec" -eq 0 ]; then
             echo "PASS: Maintenance suite completed cleanly."
           else

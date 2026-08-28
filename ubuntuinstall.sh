@@ -352,6 +352,7 @@ ENV_TYPE=""
 USE_REMOTE_SSH=""
 FULL_AUTO=0  # set to 1 when Full profile on a server so SSH hardening runs auto
 SSH_AUTO_MODE=0
+_KERNEL_UPDATE_PENDING=0  # set to 1 by update_kernel; consumed by _print_run_summary
 
 # --- metrics & run summary (shown at the end with a bar chart) ---
 declare -A METRICS=(
@@ -586,7 +587,7 @@ maintenance_menu() {
     choice=$REPLY_CHOICE
     rc=0
     case $choice in
-      0) mark_step system_update "running"; show_progress; update_system   || rc=$?; mark_step system_update "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      0) mark_step system_update "running"; show_progress; update_system   || rc=$?; mark_step system_update "$([ $rc -eq 0 ] && echo done || echo skip)"; update_kernel || rc=$?;;
       1) mark_step dnscrypt "running";      show_progress; setup_dnscrypt  || rc=$?; mark_step dnscrypt      "$([ $rc -eq 0 ] && echo done || echo skip)";;
       2) mark_step firewall "running";     show_progress; setup_firewall   || rc=$?; mark_step firewall     "$([ $rc -eq 0 ] && echo done || echo skip)";;
       3) mark_step tor "running";          show_progress; setup_tor        || rc=$?; mark_step tor          "$([ $rc -eq 0 ] && echo done || echo skip)";;
@@ -623,6 +624,82 @@ update_system() {
       apt-transport-https software-properties-common \
       wget curl gnupg lsb-release ca-certificates
   metrics_add pkgs_installed 8
+}
+
+# Update to the latest GA (general-availability) Ubuntu kernel and
+# matching headers. Skipped if no new kernel is available. Does NOT
+# reboot; the end-of-run summary will offer one. Conservative on purpose:
+# no HWE / no mainline / no edge.
+update_kernel() {
+  msg "Checking for kernel updates (latest GA only)..."
+  _warn_if_not_tmux
+
+  if [ "$EUID" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    err "sudo is required to update the kernel."
+    return 1
+  fi
+
+  # Capture running kernel so we can detect an actual change.
+  local uname_r
+  uname_r="$(uname -r)"
+
+  # apt-get update first so the apt cache and candidate versions are current.
+  # Self-contained: safe to call even if update_system ran first.
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get update
+
+  # Resolve candidate versions for the GA image/headers metapackages.
+  # linux-image-generic and linux-headers-generic track the GA kernel on
+  # every Ubuntu release; linux-modules-extra-generic provides common
+  # device drivers. Skip silently if a package is not in the pocket.
+  local pkgs=()
+  for p in linux-image-generic linux-headers-generic linux-modules-extra-generic; do
+    if apt-cache show "$p" >/dev/null 2>&1; then
+      pkgs+=("$p")
+    else
+      info "  Skipping $p (not in apt cache for this release)."
+    fi
+  done
+  if [ "${#pkgs[@]}" -eq 0 ]; then
+    warn "No kernel metapackages found — kernel update skipped."
+    return 0
+  fi
+
+  # Only install if a newer candidate than installed exists.
+  local needs_update=0 pkg installed cand
+  for pkg in "${pkgs[@]}"; do
+    installed="$(dpkg-query -W -f='${Status} ${Version}\n' "$pkg" 2>/dev/null | awk '/ installed / {print $NF; exit}')"
+    cand="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    if [ -z "$installed" ] || [ "$installed" != "$cand" ]; then
+      needs_update=1
+      info "  $pkg: installed=${installed:-<none>} candidate=${cand:-<none>}"
+    fi
+  done
+  if [ "$needs_update" -eq 0 ]; then
+    ok "Kernel already up to date (running: $uname_r)."
+    return 0
+  fi
+
+  info "Installing: ${pkgs[*]}"
+  # Disable any running kernel livepatch so the new image is not blocked.
+  if command -v canonical-livepatch >/dev/null 2>&1; then
+    run sudo canonical-livepatch disable || true
+  fi
+  if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"; then
+    err "Kernel install failed. Existing kernel is untouched."
+    return 1
+  fi
+
+  # full-upgrade picks up the linux-image-* transitional package bump that
+  # the metapackage alone sometimes leaves dangling.
+  run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade
+
+  local new_kernel
+  new_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
+  metrics_add pkgs_installed "${#pkgs[@]}"
+  ok "Kernel update staged. Running: $uname_r  →  Installed: ${new_kernel:-unknown} (reboot to activate)."
+  info "Verify candidates:  dpkg -l 'linux-image-*' | grep '^ii'"
+  # Set a global flag so _print_run_summary can offer the reboot.
+  _KERNEL_UPDATE_PENDING=1
 }
 
 apply_dns_via_nmcli() {
@@ -752,16 +829,36 @@ setup_dnscrypt() {
     info "Installing dnscrypt-proxy (this can take a minute on first install)..."
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dnscrypt-proxy
   fi
-  if [ ! -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
-    err "dnscrypt-proxy.toml not found after install - cannot configure."
-    return 0
+  # Check both common config locations; Debian/Ubuntu vary on whether the
+  # package puts it under /etc/dnscrypt-proxy/ or at /etc/dnscrypt-proxy.toml.
+  local _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+  if [ ! -f "$_conf" ]; then
+    _conf="/etc/dnscrypt-proxy.toml"
   fi
-  if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ] && [ -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
-    run sudo cp /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
-    record_backup /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
+  if [ ! -f "$_conf" ]; then
+    # Neither exists: create the parent dir and write a minimal working config.
+    _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+    info "No config found — generating minimal $_conf"
+    run sudo mkdir -p "${_conf%/*}"
+    run sudo tee "$_conf" >/dev/null <<'EOF'
+# Minimal dnscrypt-proxy config — auto-generated by ubuntuinstall.sh
+listen_addresses = ['127.0.0.2:53']
+dnscrypt_proxy_servers
+[static]
+  [static.'cloudflare']
+    stamp = 'sdns://AgcAAAAAAAAABzEuMC4wLjEAEmNsb3VkZmxhcmUuY29tCi9kbnMtcXVlcnk'
+EOF
   fi
-  if ! grep -qE "listen_addresses = \['127.0.0.2:53'\]" /etc/dnscrypt-proxy/dnscrypt-proxy.toml 2>/dev/null; then
-    run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+  if [ ! -f "$_conf" ]; then
+    err "Could not create $_conf — giving up."
+    return 1
+  fi
+  if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ]; then
+    run sudo cp "$_conf" /var/backups/dnscrypt-proxy.toml.bak
+    record_backup "$_conf" /var/backups/dnscrypt-proxy.toml.bak
+  fi
+  if ! grep -qE "listen_addresses = \['127\.0\.0\.2:53'\]" "$_conf" 2>/dev/null; then
+    run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" "$_conf"
   fi
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
@@ -1893,7 +1990,7 @@ USAGE
     return $?
   fi
 
-  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; }
+  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; update_kernel; }
   ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && { mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; }
   ask_category_enabled "firewall"    "Firewall (UFW)" "y"                      && { mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; }
   ask_category_enabled "tor"         "Tor daemon" "n"                          && { mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; }
@@ -1933,6 +2030,24 @@ _print_run_summary() {
     printf '\n  \033[1;36m━━━ /etc SNAPSHOT\033[0m\n'
     printf '  Full /etc snapshot: \033[1;37m%s\033[0m\n' "$_ETC_SNAPSHOT_PATH"
     printf '  Restore whole /etc:  sudo bash %q --restore-etc-snapshot\n' "$SCRIPT_PATH"
+  fi
+  # If update_kernel staged a new image, offer a reboot once we are
+  # back at the prompt. Never auto-reboot — connection loss during the
+  # rest of the run is the bigger risk.
+  if [ "${_KERNEL_UPDATE_PENDING:-0}" = "1" ]; then
+    printf '\n  \033[1;33m━━━ KERNEL REBOOT REQUIRED\033[0m\n'
+    printf '%s\n' "  A new kernel is installed but not yet running."
+    printf '  Currently running: \033[1;37m%s\033[0m\n' "$(uname -r)"
+    local _boot_kernel
+    _boot_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
+    printf '  Highest installed: \033[1;37m%s\033[0m\n' "${_boot_kernel:-unknown}"
+    if [ -t 0 ] && prompt_yn "Reboot now to activate the new kernel?" "n"; then
+      warn "Rebooting in 5 seconds — Ctrl-C to cancel."
+      sleep 5
+      run sudo systemctl reboot
+    else
+      info "Skipped reboot. Run \033[1;36msudo systemctl reboot\033[0m when ready."
+    fi
   fi
   if [ "$_FAIL_COUNT" -gt 0 ]; then
     if [ "$STRICT_RUN" = "1" ]; then

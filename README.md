@@ -32,6 +32,8 @@ The signature check uses your local gpg pubring; the signer's public key must al
 
 At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:
 
+> **Kernel updates:** `ubuntuinstall.sh` automatically installs the latest GA (general-availability) Ubuntu kernel (`linux-image-generic`, `linux-headers-generic`, `linux-modules-extra-generic`) as part of the system-update step. It skips silently if you are already on the latest candidate. After the run it offers a reboot to activate the new kernel — it never auto-reboots mid-run. No HWE, no mainline, no edge kernels.
+
 ```bash
 cat /var/log/ubuntu-install-rollback.log
 # format: original_path<TAB>backup_path
@@ -120,6 +122,28 @@ sudo update-grub
 ```
 ```bash
 sudo do-release-upgrade
+```
+
+## Kernel update (latest GA)
+
+```bash
+sudo apt update
+```
+```bash
+sudo apt install linux-image-generic linux-headers-generic linux-modules-extra-generic -y
+```
+```bash
+sudo apt -y full-upgrade
+```
+```bash
+sudo reboot
+```
+Verify:
+```bash
+uname -r
+```
+```bash
+dpkg -l 'linux-image-*' | grep '^ii'
 ```
 
 ## Firewall

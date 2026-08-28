@@ -32,6 +32,8 @@ The signature check uses your local gpg pubring; the signer's public key must al
 
 At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:
 
+> **Kernel updates:** `ubuntuinstall.sh` auto-detects the package manager (`apt` → `dnf` → `yum`) and updates the kernel and all system packages in one pass (`apt full-upgrade -y` on Debian/Ubuntu, `dnf upgrade --refresh -y` on RHEL 8+/AlmaLinux/Rocky, `yum update -y` on CentOS 7). Old kernel packages are automatically pruned (kept: 2 newest). It skips the install if the candidate version matches what's already running. After the run it offers a reboot — it never auto-reboots mid-run. No HWE, no mainline, no edge kernels.
+
 ```bash
 cat /var/log/ubuntu-install-rollback.log
 # format: original_path<TAB>backup_path
@@ -120,6 +122,49 @@ sudo update-grub
 ```
 ```bash
 sudo do-release-upgrade
+```
+
+## Kernel + system update
+
+Auto-detects your package manager and updates kernel + system packages, then prunes old kernels (keeps 2 newest). Same logic as `update_kernel` inside `ubuntuinstall.sh`.
+
+Debian / Ubuntu:
+```bash
+sudo apt update
+```
+```bash
+sudo apt full-upgrade -y
+```
+```bash
+sudo apt autoremove --purge -y
+```
+
+RHEL 8+ / AlmaLinux / Rocky / Fedora:
+```bash
+sudo dnf upgrade --refresh -y
+```
+```bash
+sudo dnf autoremove -y
+```
+
+Legacy CentOS 7 / RHEL 7:
+```bash
+sudo yum update -y
+```
+```bash
+sudo yum autoremove -y
+```
+
+Verify and reboot (if kernel changed):
+```bash
+uname -r
+```
+```bash
+dpkg -l 'linux-image-*' | grep '^ii'   # on apt
+rpm -q kernel                           # on dnf/yum
+```
+```bash
+sudo systemctl reboot
 ```
 
 ## Firewall

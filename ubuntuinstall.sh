@@ -352,6 +352,7 @@ ENV_TYPE=""
 USE_REMOTE_SSH=""
 FULL_AUTO=0  # set to 1 when Full profile on a server so SSH hardening runs auto
 SSH_AUTO_MODE=0
+_KERNEL_UPDATE_PENDING=0  # set to 1 by update_kernel; consumed by _print_run_summary
 
 # --- metrics & run summary (shown at the end with a bar chart) ---
 declare -A METRICS=(
@@ -586,7 +587,7 @@ maintenance_menu() {
     choice=$REPLY_CHOICE
     rc=0
     case $choice in
-      0) mark_step system_update "running"; show_progress; update_system   || rc=$?; mark_step system_update "$([ $rc -eq 0 ] && echo done || echo skip)";;
+      0) mark_step system_update "running"; show_progress; update_system   || rc=$?; mark_step system_update "$([ $rc -eq 0 ] && echo done || echo skip)"; update_kernel || rc=$?;;
       1) mark_step dnscrypt "running";      show_progress; setup_dnscrypt  || rc=$?; mark_step dnscrypt      "$([ $rc -eq 0 ] && echo done || echo skip)";;
       2) mark_step firewall "running";     show_progress; setup_firewall   || rc=$?; mark_step firewall     "$([ $rc -eq 0 ] && echo done || echo skip)";;
       3) mark_step tor "running";          show_progress; setup_tor        || rc=$?; mark_step tor          "$([ $rc -eq 0 ] && echo done || echo skip)";;
@@ -623,6 +624,133 @@ update_system() {
       apt-transport-https software-properties-common \
       wget curl gnupg lsb-release ca-certificates
   metrics_add pkgs_installed 8
+}
+
+# Update the kernel and system packages, then prune old kernels.
+# Auto-detects the package manager (apt / dnf / yum).  For apt the
+# behaviour is conservative: it stays on the GA kernel track (no HWE,
+# no mainline, no edge).  Does NOT reboot; the end-of-run summary
+# offers one once.  Safe to call standalone or chained after update_system.
+update_kernel() {
+  msg "System and kernel update..."
+  _warn_if_not_tmux
+
+  if [ "$EUID" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    err "sudo required for kernel update."
+    return 1
+  fi
+
+  local uname_r
+  uname_r="$(uname -r)"
+
+  # ── APT (Debian / Ubuntu / derivatives) ──────────────────────────
+  if command -v apt >/dev/null 2>&1; then
+    info "Package manager: apt ($(lsb_release -ds 2>/dev/null || uname -sr))"
+
+    # Refresh package lists so the candidate kernel version is current.
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get update
+
+    # Check whether a kernel upgrade is actually available before touching
+    # anything.  We compare the candidate version of linux-image-generic
+    # against whatever is currently installed; if they match, we skip.
+    local installed cand
+    installed="$(dpkg-query -W -f='${Version}' linux-image-generic 2>/dev/null || true)"
+    cand="$(apt-cache policy linux-image-generic 2>/dev/null | awk '/Candidate:/ {print $2; exit}' || true)"
+    if [ -n "$installed" ] && [ "$installed" = "$cand" ]; then
+      ok "Kernel already up to date (running: $uname_r)."
+    else
+      if [ -n "$cand" ] && [ -n "$installed" ]; then
+        info "  linux-image-generic: ${installed} → ${cand}"
+      fi
+
+      # Disable livepatch so it does not block new kernel activation.
+      if command -v canonical-livepatch >/dev/null 2>&1; then
+        run sudo canonical-livepatch disable || true
+      fi
+
+      # full-upgrade handles the entire upgrade atomically: deps, kernel
+      # metapackages, transitional packages, and any kernel-module stubs.
+      info "Running apt full-upgrade..."
+      if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade; then
+        err "apt full-upgrade failed — existing kernel is untouched."
+        return 1
+      fi
+      metrics_add pkgs_upgraded 1
+    fi
+
+    # ── Prune old kernels ─────────────────────────────────────────
+    # Keep at least 2 kernels (current + one fallback).  Removing
+    # only the meta-packages leaves the actual vmlinuz/initrd files
+    # dangling, so we target linux-image-* and linux-headers-* directly.
+    info "Cleaning up old kernel packages..."
+
+    # Try purge-old-kernels first (ships in byobu; no-op if not present).
+    if command -v purge-old-kernels >/dev/null 2>&1; then
+      run sudo purge-old-kernels -y 2>/dev/null || true
+    fi
+
+    # Fallback / complement: autoremove any kernel packages that are no
+    # longer required (pre-installed metapackage leaves old image pkgs).
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get -y autoremove
+
+    # If autoremove did not prune kernels (e.g. manually installed images),
+    # do a targeted removal of every installed kernel except the two newest.
+    local running_kver removed
+    running_kver="$(uname -r)"
+    removed="$(dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-headers-*' 2>/dev/null \
+        | sort -V \
+        | head -n -2 \
+        | grep -vE '^(linux-image-generic|linux-headers-generic|linux-modules-generic|linux-image-unsigned-generic|linux-headers-virtual|linux-virtual)$' \
+        | grep -vE "^linux-(image|headers)-${running_kver}$" \
+        | tr '\n' ' ' || true)"
+    if [ -n "$removed" ]; then
+      info "  Pruning: $removed"
+      run sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $removed || true
+    else
+      info "  No additional kernels to prune."
+    fi
+
+    # ── DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) ──────────────
+  elif command -v dnf >/dev/null 2>&1; then
+    info "Package manager: dnf"
+    if ! run sudo dnf upgrade --refresh -y; then
+      err "dnf upgrade failed."
+      return 1
+    fi
+    run sudo dnf autoremove -y
+    metrics_add pkgs_upgraded 1
+
+    # ── YUM (legacy CentOS 7 / RHEL 7) ──────────────────────────
+  elif command -v yum >/dev/null 2>&1; then
+    info "Package manager: yum"
+    if ! run sudo yum update -y; then
+      err "yum update failed."
+      return 1
+    fi
+    run sudo yum autoremove -y
+    metrics_add pkgs_upgraded 1
+
+    # ── Unsupported ───────────────────────────────────────────────
+  else
+    err "No supported package manager (apt/dnf/yum) found."
+    return 1
+  fi
+
+  # Report what is now installed vs what is running.
+  local new_kernel verify_cmd
+  case "$(command -v apt >/dev/null 2>&1 && echo apt || command -v dnf >/dev/null 2>&1 && echo dnf || command -v yum >/dev/null 2>&1 && echo yum || echo none)" in
+    apt) verify_cmd="dpkg -l 'linux-image-*' | grep '^ii'" ;;
+    dnf|yum) verify_cmd="rpm -q kernel" ;;
+    *) verify_cmd="uname -r" ;;
+  esac
+  new_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
+  if [ -n "$new_kernel" ] && [ "$new_kernel" != "$uname_r" ]; then
+    ok "Kernel updated: running $uname_r → installed $new_kernel (reboot to activate)."
+    info "  After reboot: uname -r  &&  $verify_cmd"
+    _KERNEL_UPDATE_PENDING=1
+  else
+    ok "Kernel up to date ($uname_r)."
+  fi
 }
 
 apply_dns_via_nmcli() {
@@ -752,16 +880,36 @@ setup_dnscrypt() {
     info "Installing dnscrypt-proxy (this can take a minute on first install)..."
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dnscrypt-proxy
   fi
-  if [ ! -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
-    err "dnscrypt-proxy.toml not found after install - cannot configure."
-    return 0
+  # Check both common config locations; Debian/Ubuntu vary on whether the
+  # package puts it under /etc/dnscrypt-proxy/ or at /etc/dnscrypt-proxy.toml.
+  local _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+  if [ ! -f "$_conf" ]; then
+    _conf="/etc/dnscrypt-proxy.toml"
   fi
-  if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ] && [ -f /etc/dnscrypt-proxy/dnscrypt-proxy.toml ]; then
-    run sudo cp /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
-    record_backup /etc/dnscrypt-proxy/dnscrypt-proxy.toml /var/backups/dnscrypt-proxy.toml.bak
+  if [ ! -f "$_conf" ]; then
+    # Neither exists: create the parent dir and write a minimal working config.
+    _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+    info "No config found — generating minimal $_conf"
+    run sudo mkdir -p "${_conf%/*}"
+    run sudo tee "$_conf" >/dev/null <<'EOF'
+# Minimal dnscrypt-proxy config — auto-generated by ubuntuinstall.sh
+listen_addresses = ['127.0.0.2:53']
+dnscrypt_proxy_servers
+[static]
+  [static.'cloudflare']
+    stamp = 'sdns://AgcAAAAAAAAABzEuMC4wLjEAEmNsb3VkZmxhcmUuY29tCi9kbnMtcXVlcnk'
+EOF
   fi
-  if ! grep -qE "listen_addresses = \['127.0.0.2:53'\]" /etc/dnscrypt-proxy/dnscrypt-proxy.toml 2>/dev/null; then
-    run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+  if [ ! -f "$_conf" ]; then
+    err "Could not create $_conf — giving up."
+    return 1
+  fi
+  if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ]; then
+    run sudo cp "$_conf" /var/backups/dnscrypt-proxy.toml.bak
+    record_backup "$_conf" /var/backups/dnscrypt-proxy.toml.bak
+  fi
+  if ! grep -qE "listen_addresses = \['127\.0\.0\.2:53'\]" "$_conf" 2>/dev/null; then
+    run sudo sed -i "s|# listen_addresses = \[\]|listen_addresses = ['127.0.0.2:53']|" "$_conf"
   fi
   run sudo systemctl restart dnscrypt-proxy
   run sudo systemctl enable dnscrypt-proxy
@@ -1893,7 +2041,7 @@ USAGE
     return $?
   fi
 
-  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; }
+  ask_category_enabled "system"      "System update + base packages" "y"      && { mark_step system_update "running"; show_progress; update_system;  mark_step system_update "done"; update_kernel; }
   ask_category_enabled "dns"         "DNSCrypt (DNS method is ambiguous - you'll be asked)" "n" && { mark_step dnscrypt "running"; show_progress; setup_dnscrypt; mark_step dnscrypt "done"; }
   ask_category_enabled "firewall"    "Firewall (UFW)" "y"                      && { mark_step firewall "running"; show_progress; setup_firewall; mark_step firewall "done"; }
   ask_category_enabled "tor"         "Tor daemon" "n"                          && { mark_step tor "running"; show_progress; setup_tor; mark_step tor "done"; }
@@ -1933,6 +2081,24 @@ _print_run_summary() {
     printf '\n  \033[1;36m━━━ /etc SNAPSHOT\033[0m\n'
     printf '  Full /etc snapshot: \033[1;37m%s\033[0m\n' "$_ETC_SNAPSHOT_PATH"
     printf '  Restore whole /etc:  sudo bash %q --restore-etc-snapshot\n' "$SCRIPT_PATH"
+  fi
+  # If update_kernel staged a new image, offer a reboot once we are
+  # back at the prompt. Never auto-reboot — connection loss during the
+  # rest of the run is the bigger risk.
+  if [ "${_KERNEL_UPDATE_PENDING:-0}" = "1" ]; then
+    printf '\n  \033[1;33m━━━ KERNEL REBOOT REQUIRED\033[0m\n'
+    printf '%s\n' "  A new kernel is installed but not yet running."
+    printf '  Currently running: \033[1;37m%s\033[0m\n' "$(uname -r)"
+    local _boot_kernel
+    _boot_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
+    printf '  Highest installed: \033[1;37m%s\033[0m\n' "${_boot_kernel:-unknown}"
+    if [ -t 0 ] && prompt_yn "Reboot now to activate the new kernel?" "n"; then
+      warn "Rebooting in 5 seconds — Ctrl-C to cancel."
+      sleep 5
+      run sudo systemctl reboot
+    else
+      info "Skipped reboot. Run \033[1;36msudo systemctl reboot\033[0m when ready."
+    fi
   fi
   if [ "$_FAIL_COUNT" -gt 0 ]; then
     if [ "$STRICT_RUN" = "1" ]; then

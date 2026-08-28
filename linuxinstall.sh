@@ -287,7 +287,9 @@ prompt_choice() {
     printf 'Choose [1-%d] (default 1): ' "${#opts[@]}" >/dev/tty
     read -r a </dev/tty
   else
-    warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to 1 for: $q"
+    if [ "${QUIET_PROMPTS:-0}" != "1" ]; then
+      warn "stdin is not a TTY and /dev/tty is unavailable; defaulting to 1 for: $q"
+    fi
     a=1
   fi
   a="${a:-1}"

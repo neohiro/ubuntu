@@ -1,9 +1,4 @@
-# neohiro/ubuntu
-
-> **Deprecated:** Continued development is now at [neohiro/linux](https://github.com/neohiro/linux).
-> This repo ships both `linuxinstall.sh` (canonical cross-distro script) and
-> `ubuntuinstall.sh` (legacy Ubuntu-only alias). New features go to neohiro/linux.
-
+﻿# neohiro/linux
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
 [![Supported distros](https://img.shields.io/badge/distros-Ubuntu%20%7C%20Debian%20%7C%20RHEL%20%7C%20Fedora%20%7C%20SUSE%20%7C%20Arch%20%7C%20Amazon%20Linux-blue.svg)](#supported-distributions)
 
@@ -37,44 +32,17 @@ per category (environment type, SSH lockout-prone steps, ambiguous DNS/Tor/
 IPv6 choices, and the new helper scripts are fetched on-demand):
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh)"
 ```
 
 > Review it first:
-> `curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh | less`
-**Profiles:** the script asks which profile to apply - pick the trade-off that matches your risk tolerance:
+> `curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh | less`
 
-| Profile    | What runs                                                                 | What is skipped                                  | Best for                          | Risk |
-|------------|---------------------------------------------------------------------------|---------------------------------------------------|-----------------------------------|------|
-| Recommended| DNS encryption, firewall, fail2ban, unattended-upgrades, sysctl, AppArmor, password quality/lockout | SSH hardening, Tor, IPv6 disable, ASR, DeepClean | First run / new boxes            | Low  |
-| Standard   | Recommended + SSH key-only auth, /etc snapshot                            | Tor, IPv6 disable, ASR, DeepClean                 | Most desktops and servers        | Low  |
-| Full       | Everything (Tor transparent proxy, IPv6 disable, ASR, DeepClean)          | -                                                 | Power users / single-user boxes  | Med  |
-| Custom     | You confirm every step individually                                       | -                                                 | Experts who know what they want  | Varies |
-| Maintenance| Re-runs ASR + DeepClean on demand                                         | Setup steps                                       | Ongoing system maintenance        | Low  |
-
-Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
-
-### Environment variables
-
-Control script behaviour without editing the source:
-
-| Variable                | Values                       | Default    | Effect                                                 |
-|------------------------|------------------------------|------------|--------------------------------------------------------|
-| `NEOSIGN_GPG_LEVEL`    | `off` `advisory` `required` | `off`      | GPG verification of fetched sub-scripts               |
-| `NEOSIGN_GPG_FPR`      | 40-hex fingerprint           | -          | Expected signing key fingerprint                        |
-| `STRICT_RUN`           | `0` `1`                     | `0`        | `1`: abort entire run on first command failure         |
-| `QUIET_PROMPTS`        | `0` `1`                     | `0`        | `1`: auto-confirm non-risky defaults                  |
-| `ENABLE_ETC_SNAPSHOT`  | `0` `1`                     | `1`        | `0`: skip `/etc` snapshot before changes               |
-| `TOR_NICK`             | string                       | auto       | Relay nickname (Full profile)                         |
-| `TOR_CONTACT`          | email or string              | -          | Relay contact info                                    |
-| `TOR_BANDWIDTH_RATE`   | bytes (e.g. `10 MB`)        | `100 MB`   | Relay bandwidth limit                                 |
-| `TOR_BANDWIDTH_BURST`  | bytes                        | `200 MB`   | Relay burst bandwidth                                 |
-| `TOR_ACCOUNTING_MAX`    | bytes (e.g. `200 GB`)       | unlimited  | Monthly traffic cap (triggers hard hibernation)        |
-
-Example:
-```bash
-sudo STRICT_RUN=1 ENABLE_ETC_SNAPSHOT=0 QUIET_PROMPTS=1 bash ubuntuinstall.sh
-```
+**Profiles:** the script asks which profile to apply — Recommended (safe),
+Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/
+DeepClean), or Custom (you confirm every step). Risky actions (SSH
+hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt
+individually before touching anything.
 
 **Full profile on a server runs in "auto" mode:** SSH hardening is applied
 without the interactive lockout-prone prompts (it never disables
@@ -89,7 +57,7 @@ always see what's already done and what's coming.
 
 ### Cross-distro kernel update
 
-`ubuntuinstall.sh` auto-detects the package manager and updates the kernel
+`linuxinstall.sh` auto-detects the package manager and updates the kernel
 and all system packages in one pass. The mapping is:
 
 | Family                          | Command                          |
@@ -125,7 +93,7 @@ backed up, approximate disk freed). Every config file it modifies is
 copied to a timestamped backup and appended to a single log:
 
 ```bash
-cat /var/log/ubuntu-install-rollback.log
+cat /var/log/linux-install-rollback.log
 # format: original_path<TAB>backup_path
 # restore any file with: sudo cp <backup_path> <original_path>
 ```
@@ -139,7 +107,7 @@ can `scp` it to your laptop), and refuses to disable
 
 If you launch the script over SSH, the very first thing it does is detect
 the SSH session and automatically re-exec itself inside a detached `tmux`
-session named `ubuntu-setup`, so a transient network blip won't abort the
+session named `linux-setup`, so a transient network blip won't abort the
 run.
 
 **Before you do anything that might disconnect (dnf upgrade, firewalld
@@ -147,11 +115,11 @@ reload, SSH restart, etc.)** copy this line — you'll need it to re-attach
 after a disconnect:
 
 ```bash
-tmux attach -t ubuntu-setup
+tmux attach -t linux-setup
 ```
 
 If you were disconnected entirely, log back in over SSH and run
-`tmux attach -t ubuntu-setup` to rejoin the session. If you started the
+`tmux attach -t linux-setup` to rejoin the session. If you started the
 one-liner from a local terminal (not over SSH), the tmux wrap is skipped
 automatically and there's nothing to re-attach to. When the script
 finishes successfully, the tmux session closes itself; if it fails, the
@@ -163,15 +131,42 @@ session is left intact for inspection.
 Tailscale identity layer, so it works even when `PasswordAuthentication=no`
 or the sshd service is down. Prefer Tailscale SSH for recovery.
 
+**Automatic recovery (SSH self-heal guard):** the script can install a
+self-heal guard that runs at every boot and every 60 seconds. If sshd
+ever becomes unreachable, the guard:
+- re-validates `sshd -t`
+- re-opens the SSH port in firewalld / UFW if it was dropped
+- restarts sshd if it stopped
+- re-enables `PasswordAuthentication yes` if a lockout is detected
+  (only when no pubkeys are installed)
+
+It is offered automatically at the end of `harden_ssh` when you answer
+"yes" to the "use remote SSH?" prompt. You can also install it
+standalone, remove it, or trigger a check manually:
+
+```bash
+sudo bash linuxinstall.sh --install-self-heal  # install
+sudo bash linuxinstall.sh --self-heal          # trigger now (used by cron)
+sudo bash linuxinstall.sh --no-self-heal       # remove
+```
+
+On systemd systems the guard is a `systemd` timer (`neohiro-ssh-watchdog.timer`)
+that fires 30s after boot and every 60s thereafter. On systems without
+systemd (e.g. some minimal images) it installs as a `cron.d` job with
+`@reboot` and `* * * * *` entries. Every action is logged to
+`/var/log/neohiro-ssh-watchdog.log`.
+
 **Quick recovery (from any working session — console, Tailscale SSH, or
 out-of-band):**
 
 ```bash
 # 1. Diagnose and auto-fix most lockout causes
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/restore_ssh.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/restore_ssh.sh)"
+# or, equivalently, via the main script's first-class menu entry
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh)" --restore-ssh
 
 # 2. Or undo every config change the script made (dry-run):
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)" --rollback
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh)" --rollback
 
 # 3. Or do it manually — re-enable password auth, restart sshd
 sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
@@ -199,6 +194,30 @@ sed -i 's/^Port .*/Port 22/' /mnt/etc/ssh/sshd_config
 # or restore a backup: ls /mnt/etc/ssh/sshd_config.bak.* && cp <latest> /mnt/etc/ssh/sshd_config
 ```
 
+## Maintenance suite and SSH self-heal
+
+The script's `main()` tree offers a **Maintenance suite** (distinctive
+magenta header) and a **Restore SSH** entry (above Maintenance). The
+Restore-SSH entry calls the same diagnostic routine that the
+`--restore-ssh` flag and the standalone `restore_ssh.sh` script use.
+
+The Maintenance suite itself is expanded to include:
+
+| # | Option | What it does |
+|---|---|---|
+| 1–13 | system / dns / firewall / tor / ssh / fail2ban / unattended / ipv6 / sysctl / apparmor / pam / OptimizeLinuxASR / DeepClean | Re-run any step on demand |
+| 14 | SSH diagnostics & lockout fix | Same routine as `--restore-ssh` |
+| 15 | Authorized keys | List all keys in every user's `authorized_keys` |
+| 16 | SSH config review | Print every key directive from `sshd_config` and drop-ins |
+| 17 | SSH self-heal guard | Install / remove / status of the per-minute watchdog |
+| 18 | Logs | Tail `/var/log/linux-install-rollback.log` and `/var/log/neohiro-ssh-watchdog.log` |
+| 19 | System info | Uptime, load, memory, disk, CPU, listening ports |
+| 20 | Back to main menu | — |
+
+The self-heal guard runs as root via `systemd` or cron and **never
+modifies `authorized_keys` or any credentials** — it only fixes config
+and service state, so it cannot open the system to a new attacker.
+
 ## Manual steps (cross-distro)
 
 The interactive script covers everything below, but the equivalent
@@ -206,7 +225,7 @@ commands per distribution family are listed for reference.
 
 ### Kernel + system update (manual)
 
-Same logic as `update_kernel` inside `ubuntuinstall.sh`. Auto-detects the
+Same logic as `update_kernel` inside `linuxinstall.sh`. Auto-detects the
 package manager and updates kernel + system packages, then prunes old
 kernels (keeps 2 newest on apt).
 
@@ -327,7 +346,7 @@ Arch:
 yay -S aur-auto-update    # AUR helper
 ```
 
-> `ubuntuinstall.sh` installs and configures `unattended-upgrades` only on
+> `linuxinstall.sh` installs and configures `unattended-upgrades` only on
 > apt-based distros. On other families it prints a one-line suggestion
 > and skips.
 
@@ -418,7 +437,7 @@ PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 MaxAuthTries 3
-LoginGraceTime 20
+LoginGraceTime 30s
 X11Forwarding no
 AllowUsers <youruser>
 ```
@@ -485,3 +504,4 @@ ss -tulnp                                               # re-check listeners
   <a href="https://github.com/sponsors/neohiro"><img src="https://img.shields.io/badge/Sponsor%20on%20GitHub-%E2%9D%A4-EA4AAA?logo=githubsponsors&style=for-the-badge" alt="GitHub Sponsors"></a>&nbsp;&nbsp;
   <a href="https://www.patreon.com/frenzypenguin_media"><img src="https://img.shields.io/badge/Patreon-frenzypenguin__media-F96854?logo=patreon&style=for-the-badge" alt="Support on Patreon"></a>
 </p>
+

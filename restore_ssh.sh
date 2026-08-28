@@ -14,7 +14,7 @@
 set -eo pipefail
 
 PROG_NAME="restore_ssh"
-ROLLBACK_LOG="/var/log/ubuntu-install-rollback.log"
+ROLLBACK_LOG="/var/log/linux-install-rollback.log"
 
 # Color constants sourced from lib/color.sh (falls back inline).
 # shellcheck disable=SC1091

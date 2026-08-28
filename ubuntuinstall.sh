@@ -626,80 +626,131 @@ update_system() {
   metrics_add pkgs_installed 8
 }
 
-# Update to the latest GA (general-availability) Ubuntu kernel and
-# matching headers. Skipped if no new kernel is available. Does NOT
-# reboot; the end-of-run summary will offer one. Conservative on purpose:
-# no HWE / no mainline / no edge.
+# Update the kernel and system packages, then prune old kernels.
+# Auto-detects the package manager (apt / dnf / yum).  For apt the
+# behaviour is conservative: it stays on the GA kernel track (no HWE,
+# no mainline, no edge).  Does NOT reboot; the end-of-run summary
+# offers one once.  Safe to call standalone or chained after update_system.
 update_kernel() {
-  msg "Checking for kernel updates (latest GA only)..."
+  msg "System and kernel update..."
   _warn_if_not_tmux
 
   if [ "$EUID" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
-    err "sudo is required to update the kernel."
+    err "sudo required for kernel update."
     return 1
   fi
 
-  # Capture running kernel so we can detect an actual change.
   local uname_r
   uname_r="$(uname -r)"
 
-  # apt-get update first so the apt cache and candidate versions are current.
-  # Self-contained: safe to call even if update_system ran first.
-  run sudo DEBIAN_FRONTEND=noninteractive apt-get update
+  # ── APT (Debian / Ubuntu / derivatives) ──────────────────────────
+  if command -v apt >/dev/null 2>&1; then
+    info "Package manager: apt ($(lsb_release -ds 2>/dev/null || uname -sr))"
 
-  # Resolve candidate versions for the GA image/headers metapackages.
-  # linux-image-generic and linux-headers-generic track the GA kernel on
-  # every Ubuntu release; linux-modules-extra-generic provides common
-  # device drivers. Skip silently if a package is not in the pocket.
-  local pkgs=()
-  for p in linux-image-generic linux-headers-generic linux-modules-extra-generic; do
-    if apt-cache show "$p" >/dev/null 2>&1; then
-      pkgs+=("$p")
+    # Refresh package lists so the candidate kernel version is current.
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get update
+
+    # Check whether a kernel upgrade is actually available before touching
+    # anything.  We compare the candidate version of linux-image-generic
+    # against whatever is currently installed; if they match, we skip.
+    local installed cand
+    installed="$(dpkg-query -W -f='${Version}' linux-image-generic 2>/dev/null || true)"
+    cand="$(apt-cache policy linux-image-generic 2>/dev/null | awk '/Candidate:/ {print $2; exit}' || true)"
+    if [ -n "$installed" ] && [ "$installed" = "$cand" ]; then
+      ok "Kernel already up to date (running: $uname_r)."
     else
-      info "  Skipping $p (not in apt cache for this release)."
-    fi
-  done
-  if [ "${#pkgs[@]}" -eq 0 ]; then
-    warn "No kernel metapackages found — kernel update skipped."
-    return 0
-  fi
+      if [ -n "$cand" ] && [ -n "$installed" ]; then
+        info "  linux-image-generic: ${installed} → ${cand}"
+      fi
 
-  # Only install if a newer candidate than installed exists.
-  local needs_update=0 pkg installed cand
-  for pkg in "${pkgs[@]}"; do
-    installed="$(dpkg-query -W -f='${Status} ${Version}\n' "$pkg" 2>/dev/null | awk '/ installed / {print $NF; exit}')"
-    cand="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
-    if [ -z "$installed" ] || [ "$installed" != "$cand" ]; then
-      needs_update=1
-      info "  $pkg: installed=${installed:-<none>} candidate=${cand:-<none>}"
-    fi
-  done
-  if [ "$needs_update" -eq 0 ]; then
-    ok "Kernel already up to date (running: $uname_r)."
-    return 0
-  fi
+      # Disable livepatch so it does not block new kernel activation.
+      if command -v canonical-livepatch >/dev/null 2>&1; then
+        run sudo canonical-livepatch disable || true
+      fi
 
-  info "Installing: ${pkgs[*]}"
-  # Disable any running kernel livepatch so the new image is not blocked.
-  if command -v canonical-livepatch >/dev/null 2>&1; then
-    run sudo canonical-livepatch disable || true
-  fi
-  if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"; then
-    err "Kernel install failed. Existing kernel is untouched."
+      # full-upgrade handles the entire upgrade atomically: deps, kernel
+      # metapackages, transitional packages, and any kernel-module stubs.
+      info "Running apt full-upgrade..."
+      if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade; then
+        err "apt full-upgrade failed — existing kernel is untouched."
+        return 1
+      fi
+      metrics_add pkgs_upgraded 1
+    fi
+
+    # ── Prune old kernels ─────────────────────────────────────────
+    # Keep at least 2 kernels (current + one fallback).  Removing
+    # only the meta-packages leaves the actual vmlinuz/initrd files
+    # dangling, so we target linux-image-* and linux-headers-* directly.
+    info "Cleaning up old kernel packages..."
+
+    # Try purge-old-kernels first (ships in byobu; no-op if not present).
+    if command -v purge-old-kernels >/dev/null 2>&1; then
+      run sudo purge-old-kernels -y 2>/dev/null || true
+    fi
+
+    # Fallback / complement: autoremove any kernel packages that are no
+    # longer required (pre-installed metapackage leaves old image pkgs).
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get -y autoremove
+
+    # If autoremove did not prune kernels (e.g. manually installed images),
+    # do a targeted removal of every installed kernel except the two newest.
+    local running_kver removed
+    running_kver="$(uname -r)"
+    removed="$(dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-headers-*' 2>/dev/null \
+        | sort -V \
+        | head -n -2 \
+        | grep -vE '^(linux-image-generic|linux-headers-generic|linux-modules-generic|linux-image-unsigned-generic|linux-headers-virtual|linux-virtual)$' \
+        | grep -vE "^linux-(image|headers)-${running_kver}$" \
+        | tr '\n' ' ' || true)"
+    if [ -n "$removed" ]; then
+      info "  Pruning: $removed"
+      run sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $removed || true
+    else
+      info "  No additional kernels to prune."
+    fi
+
+    # ── DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) ──────────────
+  elif command -v dnf >/dev/null 2>&1; then
+    info "Package manager: dnf"
+    if ! run sudo dnf upgrade --refresh -y; then
+      err "dnf upgrade failed."
+      return 1
+    fi
+    run sudo dnf autoremove -y
+    metrics_add pkgs_upgraded 1
+
+    # ── YUM (legacy CentOS 7 / RHEL 7) ──────────────────────────
+  elif command -v yum >/dev/null 2>&1; then
+    info "Package manager: yum"
+    if ! run sudo yum update -y; then
+      err "yum update failed."
+      return 1
+    fi
+    run sudo yum autoremove -y
+    metrics_add pkgs_upgraded 1
+
+    # ── Unsupported ───────────────────────────────────────────────
+  else
+    err "No supported package manager (apt/dnf/yum) found."
     return 1
   fi
 
-  # full-upgrade picks up the linux-image-* transitional package bump that
-  # the metapackage alone sometimes leaves dangling.
-  run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade
-
-  local new_kernel
+  # Report what is now installed vs what is running.
+  local new_kernel verify_cmd
+  case "$(command -v apt >/dev/null 2>&1 && echo apt || command -v dnf >/dev/null 2>&1 && echo dnf || command -v yum >/dev/null 2>&1 && echo yum || echo none)" in
+    apt) verify_cmd="dpkg -l 'linux-image-*' | grep '^ii'" ;;
+    dnf|yum) verify_cmd="rpm -q kernel" ;;
+    *) verify_cmd="uname -r" ;;
+  esac
   new_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
-  metrics_add pkgs_installed "${#pkgs[@]}"
-  ok "Kernel update staged. Running: $uname_r  →  Installed: ${new_kernel:-unknown} (reboot to activate)."
-  info "Verify candidates:  dpkg -l 'linux-image-*' | grep '^ii'"
-  # Set a global flag so _print_run_summary can offer the reboot.
-  _KERNEL_UPDATE_PENDING=1
+  if [ -n "$new_kernel" ] && [ "$new_kernel" != "$uname_r" ]; then
+    ok "Kernel updated: running $uname_r → installed $new_kernel (reboot to activate)."
+    info "  After reboot: uname -r  &&  $verify_cmd"
+    _KERNEL_UPDATE_PENDING=1
+  else
+    ok "Kernel up to date ($uname_r)."
+  fi
 }
 
 apply_dns_via_nmcli() {

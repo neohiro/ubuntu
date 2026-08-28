@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 # restore_ssh.sh - Diagnose and fix the most common SSH lockout causes.
 #
-# Use this when the main ubuntuinstall.sh (or OptimizeLinuxASR.sh / DeepClean.sh
-# in Full mode) has made it impossible to log in. Designed to be safe to run
-# from a console (VPS provider's web shell) or via Tailscale SSH.
+# Works on: Ubuntu / Debian (apt), RHEL / AlmaLinux / Rocky / Fedora (dnf/yum),
+#           SUSE / openSUSE (zypper), Arch Linux (pacman)
 #
-# Scans: sshd service, UFW rules, PasswordAuthentication in both
-# /etc/ssh/sshd_config AND /etc/ssh/sshd_config.d/*.conf drop-ins,
-# authorized_keys, and the rollback log. Proposes each fix; asks before
-# applying.
+# Scans: sshd service, firewall rules (UFW or firewalld), PasswordAuthentication
+# in both /etc/ssh/sshd_config AND /etc/ssh/sshd_config.d/*.conf drop-ins,
+# authorized_keys, and the rollback log. Proposes each fix; asks before applying.
 #
 # Usage:   sudo bash restore_ssh.sh
 #
 # Exit codes: 0 = OK / fixes applied, 1 = could not apply, 2 = no fixes needed.
-set -o pipefail
+set -eo pipefail
 
 PROG_NAME="restore_ssh"
 ROLLBACK_LOG="/var/log/ubuntu-install-rollback.log"
@@ -26,7 +24,7 @@ else
   C_RED=""; C_GRN=""; C_YEL=""; C_CYA=""; C_BLD=""; C_RST=""
 fi
 ok()    { printf '%s[ OK ]%s %s\n' "$C_GRN" "$C_RST" "$*"; }
-warn()  { printf '%s[WARN]%s %s\n' "$C_YEL" "$C_RST" "$*"; }
+warn()  { printf '%s[WARN]%s %s\n' "$C_YEL" "$C_RST" "$*" 1>&2; }
 err()   { printf '%s[FAIL]%s %s\n' "$C_RED" "$C_RST" "$*" 1>&2; }
 info()  { printf '%s[INFO]%s %s\n' "$C_CYA" "$C_RST" "$*"; }
 bold()  { printf '%s%s%s\n' "$C_BLD" "$*" "$C_RST"; }
@@ -54,6 +52,37 @@ require_root() {
     err "Please run as root: sudo bash $PROG_NAME"
     exit 1
   fi
+}
+
+# Detect package manager
+detect_pkg_mgr() {
+  if command -v pacman >/dev/null 2>&1 && [ -f /etc/pacman.conf ]; then
+    echo "pacman"
+  elif command -v zypper >/dev/null 2>&1; then
+    echo "zypper"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
+  elif command -v apt-get >/dev/null 2>&1 || [ -f /etc/apt/sources.list ]; then
+    echo "apt"
+  else
+    echo ""
+  fi
+}
+
+PKG_MGR=$(detect_pkg_mgr)
+
+pkg_install_ssh() {
+  case "$PKG_MGR" in
+    apt)    run sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server ;;
+    dnf)    run sudo dnf install -y openssh-server ;;
+    yum)    run sudo yum install -y openssh-server ;;
+    zypper) run sudo zypper install -y --no-confirm openssh ;;
+    pacman) run sudo pacman -S --noconfirm openssh ;;
+    *)      err "Cannot install openssh-server: unsupported package manager ($PKG_MGR)"
+             return 1 ;;
+  esac
 }
 
 # Replace directive in-place or append it (used for both main config and drop-ins).
@@ -85,6 +114,8 @@ _effective_port() {
   awk '/^[[:space:]]*Port[[:space:]]/ {print $2; exit}' "$1" 2>/dev/null
 }
 
+ssh_port() { _effective_port /etc/ssh/sshd_config; }
+
 count_pubkeys() {
   local f c total=0
   for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
@@ -95,12 +126,28 @@ count_pubkeys() {
   echo "$total"
 }
 
+# Detect which sshd service unit is active on this distro.
+_sshd_unit() {
+  for u in sshd ssh; do
+    if systemctl is-active --quiet "$u" 2>/dev/null; then
+      echo "$u"; return 0
+    fi
+  done
+  echo "sshd"; return 1
+}
+
+restart_sshd() {
+  local unit
+  unit=$(_sshd_unit)
+  run sudo systemctl restart "$unit"
+}
+
 diagnose() {
   bold "=== Diagnosing SSH lockout causes ==="
   FIXES=()  # global
 
   if ! command -v sshd >/dev/null 2>&1; then
-    err "sshd is not installed. Run:  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server"
+    err "sshd is not installed. Run:  sudo bash restore_ssh.sh  (script will fix this)"
     FIXES+=("install-sshd")
   else
     ok "sshd is installed."
@@ -115,31 +162,38 @@ diagnose() {
   fi
 
   # 1) Service running?
-  if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
-    ok "sshd service is running."
+  local ssh_unit
+  ssh_unit=$(_sshd_unit 2>/dev/null) || ssh_unit="sshd"
+  if systemctl is-active --quiet "$ssh_unit" 2>/dev/null; then
+    ok "sshd service ($ssh_unit) is running."
   else
     FIXES+=("restart-ssh")
     warn "sshd service is NOT running."
   fi
 
   # 2) Firewall blocks the port?
-  if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -qE 'Status: active'; then
-    local port="${PORT_OVERRIDE:-$(ssh_port 2>/dev/null)}"
-    port="${port:-22}"
+  local port
+  port=$(ssh_port 2>/dev/null) || port=""
+  port="${port:-22}"
+
+  if command -v firewall-cmd >/dev/null 2>&1 && \
+     systemctl is-active --quiet firewalld 2>/dev/null; then
+    if sudo firewall-cmd --list-ports 2>/dev/null | grep -qE "${port}/tcp"; then
+      ok "firewalld allows port $port/tcp."
+    else
+      FIXES+=("fw-allow")
+      warn "firewalld does not allow port $port/tcp."
+    fi
+  elif command -v ufw >/dev/null 2>&1 && \
+       sudo ufw status 2>/dev/null | grep -qE 'Status: active'; then
     if sudo ufw status 2>/dev/null | grep -qE "ALLOW IN.*${port}/tcp"; then
       ok "UFW allows port $port/tcp."
     else
-      FIXES+=("ufw-allow-current-port")
+      FIXES+=("fw-allow")
       warn "UFW does not allow port $port/tcp."
     fi
-  elif command -v iptables >/dev/null 2>&1; then
-    if sudo iptables -S INPUT 2>/dev/null | grep -qE -- "-p tcp .* --dport ${PORT_OVERRIDE:-22}( |$)"; then
-      ok "iptables allows the SSH port."
-    else
-      info "iptables present but no explicit ACCEPT for the SSH port (may still be allowed by policy)."
-    fi
   else
-    info "Neither UFW nor iptables detected; skipping firewall check."
+    info "No active firewalld or UFW detected; skipping firewall check."
   fi
 
   # 3) PasswordAuthentication no without a pubkey?
@@ -174,7 +228,7 @@ diagnose() {
 
   # 4) Port non-default and not allow-listed?
   local eff_port
-  eff_port=$(ssh_port)
+  eff_port=$(ssh_port 2>/dev/null)
   if [ -n "$eff_port" ] && [ "$eff_port" != "22" ]; then
     info "Effective SSH port: $eff_port (not 22)."
     info "If you reconnect from a host firewall, make sure $eff_port/tcp is open."
@@ -194,12 +248,10 @@ diagnose() {
   fi
 }
 
-ssh_port() { _effective_port /etc/ssh/sshd_config; }
-
 apply_fixes() {
   if [ "${#FIXES[@]}" -eq 0 ]; then
     ok "No fixes required."
-    return 0
+    return 2
   fi
 
   echo
@@ -207,10 +259,10 @@ apply_fixes() {
   local f
   for f in "${FIXES[@]}"; do
     case "$f" in
-      install-sshd)                  printf "  - Install openssh-server\n" ;;
-      restart-ssh)                   printf "  - Restart sshd service\n" ;;
-      ufw-allow-current-port)        printf "  - Open current SSH port in UFW\n" ;;
-      reenable-password-auth)        printf "  - Re-enable PasswordAuthentication in $SSHCFG and drop-ins\n" ;;
+      install-sshd)            printf "  - Install openssh-server/openssh\n" ;;
+      restart-ssh)              printf "  - Restart sshd service\n" ;;
+      fw-allow)                 printf "  - Open SSH port in firewall\n" ;;
+      reenable-password-auth)    printf "  - Re-enable PasswordAuthentication\n" ;;
     esac
   done
 
@@ -222,18 +274,30 @@ apply_fixes() {
   for f in "${FIXES[@]}"; do
     case "$f" in
       install-sshd)
-        run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
-        ok "openssh-server installed (or already present)."
+        if ! pkg_install_ssh; then
+          err "sshd installation failed."
+          return 1
+        fi
+        ok "openssh-server installed."
         ;;
       restart-ssh)
-        run sudo systemctl restart ssh
+        restart_sshd
         ok "sshd restarted."
         ;;
-      ufw-allow-current-port)
+      fw-allow)
         local port
-        port=$(ssh_port); port="${port:-22}"
-        run sudo ufw allow "${port}/tcp"
-        ok "UFW: opened $port/tcp."
+        port=$(ssh_port 2>/dev/null) || port="22"
+        if command -v firewall-cmd >/dev/null 2>&1 && \
+           systemctl is-active --quiet firewalld 2>/dev/null; then
+          run sudo firewall-cmd --add-port="${port}/tcp" --permanent
+          run sudo firewall-cmd --reload
+          ok "firewalld: opened $port/tcp."
+        elif command -v ufw >/dev/null 2>&1; then
+          run sudo ufw allow "${port}/tcp"
+          ok "UFW: opened $port/tcp."
+        else
+          warn "No firewall tool found; skipping."
+        fi
         ;;
       reenable-password-auth)
         if [ -f /etc/ssh/sshd_config ]; then
@@ -242,19 +306,23 @@ apply_fixes() {
         for d in /etc/ssh/sshd_config.d/*.conf; do
           [ -f "$d" ] || continue
           if sudo grep -qE '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$d"; then
-            run sudo sed -i -E 's|^[[:space:]]*PasswordAuthentication[[:space:]]+no|#PasswordAuthentication no  # disabled by restore_ssh.sh|' "$d"
+            run sudo sed -i -E \
+              's|^[[:space:]]*PasswordAuthentication[[:space:]]+no|#PasswordAuthentication no  # disabled by restore_ssh.sh|' \
+              "$d"
           fi
         done
-        ok "PasswordAuthentication set to yes in main config and drop-ins."
+        ok "PasswordAuthentication set to yes."
         ;;
     esac
   done
 
-  if ! sudo sshd -t; then
+  local ssh_unit
+  ssh_unit=$(_sshd_unit 2>/dev/null) || ssh_unit="sshd"
+  if ! sudo sshd -t 2>&1; then
     err "sshd -t still fails. Check /var/log/auth.log for the exact error."
     return 1
   fi
-  run sudo systemctl restart ssh
+  restart_sshd
   ok "sshd config valid; service restarted."
   return 0
 }

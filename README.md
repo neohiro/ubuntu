@@ -1,36 +1,101 @@
-# Ubuntu
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
-[![Build Status](https://github.com/neohiro/ubuntu/actions/workflows/release.yml/badge.svg)](https://github.com/neohiro/ubuntu/actions)
+# neohiro/ubuntu
 
-Linux Ubuntu commands after fresh install, automated in attached shell files (with extra hardening, please go through the shell). Offers a more secure starting point for any new super user.
+> **Note:** This repository now ships `linuxinstall.sh` as the canonical
+> cross-distro script. The legacy `ubuntuinstall.sh` is kept as an alias
+> for old `curl` one-liners. Prefer the new name going forward.
+
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
+[![Supported distros](https://img.shields.io/badge/distros-Ubuntu%20%7C%20Debian%20%7C%20RHEL%20%7C%20Fedora%20%7C%20SUSE%20%7C%20Arch-blue.svg)](#supported-distributions)
+
+Cross-distro general-purpose setup & hardening script. Auto-detects the
+distribution and the package manager, and adapts every step accordingly —
+package names, firewall tool, security tooling, kernel update path, and
+unattended-upgrades availability.
+
+Offers a more secure starting point for any new super user.
+
+## Supported distributions
+
+| Family       | Distros                                  | Package manager | Firewall    | Notes |
+|--------------|------------------------------------------|-----------------|-------------|-------|
+| Debian       | Ubuntu (incl. 24.04 LTS, 22.04, 20.04), Debian 12/11 | `apt`           | `ufw`       | full feature set (unattended-upgrades, AppArmor) |
+| RHEL         | RHEL 8/9, AlmaLinux 8/9, Rocky 8/9, CentOS Stream | `dnf`         | `firewalld` | AppArmor replaced by SELinux |
+| Legacy RHEL  | CentOS 7, RHEL 7                         | `yum`           | `firewalld` | legacy; no `dnf` |
+| Fedora       | Fedora 39+                               | `dnf`           | `firewalld` | AppArmor not on by default — uses SELinux |
+| SUSE         | openSUSE Leap 15, SLES 15                | `zypper`        | `firewalld` | AppArmor profile packages available |
+| Arch         | Arch Linux, Manjaro                      | `pacman`        | `firewalld` | AppArmor / fail2ban via AUR |
+
+> Distribution is detected from `/etc/os-release` (with `ID_LIKE` fallback).
+> The package manager is then selected from the order `pacman → zypper → dnf
+> → yum → apt`, so Arch derivatives pick `pacman`, SUSE picks `zypper`,
+> RHEL/Fedora pick `dnf`, Debian/Ubuntu pick `apt`. No manual flag required.
 
 ## One-step automated setup
 
-Run the general interactive script directly from the repo — it prompts you per category (environment type, SSH lockout-prone steps, ambiguous DNS/Tor/IPv6 choices, and the new helper scripts are fetched on-demand):
+Run the general interactive script directly from the repo — it prompts you
+per category (environment type, SSH lockout-prone steps, ambiguous DNS/Tor/
+IPv6 choices, and the new helper scripts are fetched on-demand):
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)"
 ```
 
-> Review it first: `curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh | less`
+> Review it first:
+> `curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh | less`
 
-**Profiles:** the script asks which profile to apply — Recommended (safe), Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/DeepClean), or Custom (you confirm every step). Risky actions (SSH hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt individually before touching anything.
+**Profiles:** the script asks which profile to apply — Recommended (safe),
+Standard (full hardening + SSH), Full (everything including Tor/IPv6/ASR/
+DeepClean), or Custom (you confirm every step). Risky actions (SSH
+hardening, IPv6, DNS method, Tor, attack-surface reduction) always prompt
+individually before touching anything.
 
-**Full profile on a server runs in "auto" mode:** SSH hardening is applied without the interactive lockout-prone prompts (it never disables `PasswordAuthentication` unless it detects a working pubkey, and it never changes the port), so the only way to get locked out is the OpenSSH config breaking — in which case `restore_ssh.sh` (below) or Tailscale SSH can get you back in.
+**Full profile on a server runs in "auto" mode:** SSH hardening is applied
+without the interactive lockout-prone prompts (it never disables
+`PasswordAuthentication` unless it detects a working pubkey, and it never
+changes the port), so the only way to get locked out is the OpenSSH config
+breaking — in which case the in-script `restore_ssh` routine or Tailscale
+SSH can get you back in.
 
-**Progress checklist:** the script prints a colored bar chart (e.g. `━━━ PROGRESS ████████████░░░░ 12/17 (70%) ━━━`) before every step, so you always see what's already done and what's coming.
+**Progress checklist:** the script prints a colored bar chart (e.g.
+`━━━ PROGRESS ████████████░░░░ 12/17 (70%) ━━━`) before every step, so you
+always see what's already done and what's coming.
 
-**Optional GPG signature verification** of fetched sub-scripts (disabled by default):
-```bash
-# Verify all fetched *.sh files against a detached .asc, fail if bad
-sudo NEOSIGN_GPG_LEVEL=required NEOSIGN_GPG_FPR=<40-hex-fpr> \
-     bash ubuntuinstall.sh
-```
-The signature check uses your local gpg pubring; the signer's public key must already be trusted (imported once via `gpg --import`). Without a fingerprint pin, only the cryptographic check is performed.
+### Cross-distro kernel update
+
+`ubuntuinstall.sh` auto-detects the package manager and updates the kernel
+and all system packages in one pass. The mapping is:
+
+| Family                          | Command                          |
+|---------------------------------|----------------------------------|
+| Debian / Ubuntu                 | `apt full-upgrade -y`            |
+| RHEL 8+ / AlmaLinux 8/9 / Rocky | `dnf upgrade --refresh -y`       |
+| Fedora                          | `dnf upgrade --refresh -y`       |
+| Legacy CentOS 7 / RHEL 7        | `yum update -y`                  |
+| openSUSE Leap 15 / SLES 15      | `zypper update -y`               |
+| Arch / Manjaro                  | `pacman -Syu --noconfirm`        |
+
+After updating, the script:
+
+1. Runs the package manager's built-in autoremove/orphan cleanup.
+2. On `apt` only: also runs `purge-old-kernels` (if present) and prunes
+   the oldest installed `linux-image-*` / `linux-headers-*` packages,
+   keeping the running kernel and one spare. Pruned package names are
+   printed before removal so you can cancel by re-running with `N` to
+   the prune prompt.
+3. Compares the newest installed kernel in `/boot/vmlinuz-*` to
+   `uname -r`; if they differ, sets `_KERNEL_UPDATE_PENDING=1`.
+4. The end-of-run summary offers a reboot (never auto-reboots mid-run).
+
+No HWE, no mainline, no edge kernels. The script does not change the
+running kernel — a reboot is the user's choice.
 
 ### Run summary and rollback
 
-At the end of the run the script prints a colored bar-chart summary of what it actually did (packages upgraded/installed, services hardened, sysctls applied, firewall rules, auth keys, Tor services, config files backed up, approximate disk freed). Every config file it modifies is copied to a timestamped backup and appended to a single log:
+At the end of the run the script prints a colored bar-chart summary of
+what it actually did (packages upgraded/installed, services hardened,
+sysctls applied, firewall rules, auth keys, Tor services, config files
+backed up, approximate disk freed). Every config file it modifies is
+copied to a timestamped backup and appended to a single log:
 
 ```bash
 cat /var/log/ubuntu-install-rollback.log
@@ -38,25 +103,41 @@ cat /var/log/ubuntu-install-rollback.log
 # restore any file with: sudo cp <backup_path> <original_path>
 ```
 
-Before touching anything, the script also scans for existing SSH public keys, prints a recovery ed25519 key it generates on the server (so you can `scp` it to your laptop), and refuses to disable `PasswordAuthentication` until a fresh key has been validated.
+Before touching anything, the script also scans for existing SSH public
+keys, prints a recovery ed25519 key it generates on the server (so you
+can `scp` it to your laptop), and refuses to disable
+`PasswordAuthentication` until a fresh key has been validated.
 
 ### Running over SSH (resumable)
 
-If you launch the script over SSH, the very first thing it does is detect the SSH session and automatically re-exec itself inside a detached `tmux` session named `ubuntu-setup`, so a transient network blip won't abort the run.
+If you launch the script over SSH, the very first thing it does is detect
+the SSH session and automatically re-exec itself inside a detached `tmux`
+session named `ubuntu-setup`, so a transient network blip won't abort the
+run.
 
-**Before you do anything that might disconnect (apt upgrade, UFW reload, SSH restart, etc.)** copy this line — you'll need it to re-attach after a disconnect:
+**Before you do anything that might disconnect (dnf upgrade, firewalld
+reload, SSH restart, etc.)** copy this line — you'll need it to re-attach
+after a disconnect:
 
 ```bash
 tmux attach -t ubuntu-setup
 ```
 
-If you were disconnected entirely, log back in over SSH and run `tmux attach -t ubuntu-setup` to rejoin the session. If you started the one-liner from a local terminal (not over SSH), the tmux wrap is skipped automatically and there's nothing to re-attach to. When the script finishes successfully, the tmux session closes itself; if it fails, the session is left intact for inspection.
+If you were disconnected entirely, log back in over SSH and run
+`tmux attach -t ubuntu-setup` to rejoin the session. If you started the
+one-liner from a local terminal (not over SSH), the tmux wrap is skipped
+automatically and there's nothing to re-attach to. When the script
+finishes successfully, the tmux session closes itself; if it fails, the
+session is left intact for inspection.
 
-### Reconnecting after a reboot or lockout
+## Reconnecting after a reboot or lockout
 
-**Tailscale SSH bypasses OpenSSH settings** — it authenticates via the Tailscale identity layer, so it works even when `PasswordAuthentication=no` or the sshd service is down. Prefer Tailscale SSH for recovery.
+**Tailscale SSH bypasses OpenSSH settings** — it authenticates via the
+Tailscale identity layer, so it works even when `PasswordAuthentication=no`
+or the sshd service is down. Prefer Tailscale SSH for recovery.
 
-**Quick recovery (from any working session — console, Tailscale SSH, or out-of-band):**
+**Quick recovery (from any working session — console, Tailscale SSH, or
+out-of-band):**
 
 ```bash
 # 1. Diagnose and auto-fix most lockout causes
@@ -65,211 +146,181 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main
 # 2. Or undo every config change the script made (dry-run):
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/neohiro/ubuntu/main/ubuntuinstall.sh)" --rollback
 
-#    Apply for real:
 # 3. Or do it manually — re-enable password auth, restart sshd
 sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-sudo sshd -t && sudo systemctl restart ssh
+sudo sshd -t && sudo systemctl restart sshd
 ```
+
+> Package names differ by distro: `apt` uses `openssh-server`, `dnf`/`yum`
+> also use `openssh-server`, but `zypper` and `pacman` use `openssh`.
+> The script's `restore_ssh` routine handles this automatically.
 
 **Specific causes and fixes:**
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `Connection refused` after reboot | sshd not running or listening on wrong port | `sudo systemctl restart ssh; sudo ss -tulnp \| grep sshd` |
-| `No route to host` | UFW blocking | `sudo ufw allow ssh; sudo ufw allow 2222/tcp` |
+| `Connection refused` after reboot | sshd not running or listening on wrong port | `sudo systemctl restart sshd; sudo ss -tulnp \| grep sshd` |
+| `No route to host` | firewalld / UFW blocking | `sudo firewall-cmd --add-service=ssh --permanent && sudo firewall-cmd --reload` (RHEL/Fedora) — or `sudo ufw allow ssh` (Debian/Ubuntu) |
 | `Permission denied (publickey)` | Port changed to non-22 | `ssh -p 2222 user@host` |
-| OpenSSH lockout (no pubkey, PasswordAuth=no) | Only possible if you have Tailscale SSH or console access | `restore_ssh.sh` above, or out-of-band console |
+| OpenSSH lockout (no pubkey, PasswordAuth=no) | Only possible if you have Tailscale SSH or console access | `restore_ssh` routine above, or out-of-band console |
 
-**Out-of-band console only (no SSH at all):** boot cloud provider rescue ISO or use Hetzner/DO/Vultr recovery console, mount root, then:
+**Out-of-band console only (no SSH at all):** boot cloud provider rescue
+ISO or use Hetzner/DO/Vultr recovery console, mount root, then:
 ```bash
 sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /mnt/etc/ssh/sshd_config
 sed -i 's/^Port .*/Port 22/' /mnt/etc/ssh/sshd_config
 # or restore a backup: ls /mnt/etc/ssh/sshd_config.bak.* && cp <latest> /mnt/etc/ssh/sshd_config
 ```
 
-### AppArmor and Tailscale SSH
+## Manual steps (cross-distro)
 
-AppArmor profile for sshd **does not block Tailscale SSH**. Tailscale SSH is handled entirely by the `tailscaled` daemon running as a system service and uses its own TCP listeners on Tailscale's wireguard interfaces — it bypasses OpenSSH, UFW input rules, and AppArmor's sshd confinement alike. The AppArmor profile (`/etc/apparmor.d/usr.sbin.sshd`) only governs what the `sshd` binary itself can access on the filesystem and network; it has no effect on Tailscale's tunnel interfaces.
+The interactive script covers everything below, but the equivalent
+commands per distribution family are listed for reference.
 
-### Restore-SSH module
+### Kernel + system update (manual)
 
-`restore_ssh.sh` is a standalone script that diagnoses and fixes the most common lockout causes:
-- sshd service state
-- UFW port blocking (checks the effective SSH port from sshd_config)
-- `PasswordAuthentication=no` in both `/etc/ssh/sshd_config` and `/etc/ssh/sshd_config.d/*.conf` drop-ins
-- presence of authorized_keys (to distinguish real lockout from a safe pubkey-only config)
-- rollback log entries for SSH-related files
+Same logic as `update_kernel` inside `ubuntuinstall.sh`. Auto-detects the
+package manager and updates kernel + system packages, then prunes old
+kernels (keeps 2 newest on apt).
 
-It asks before applying any fix. Run it from any working session (console, Tailscale SSH, or out-of-band). It is also callable as `sudo bash ubuntuinstall.sh --restore-ssh` from the same repo.
-
-
-
-## Manual steps (no scripts, mostly)
-
+Debian / Ubuntu:
 ```bash
-sudo passwd root
-```
-```bash
-sudo apt update && sudo apt upgrade -y
-```
-```bash
-sudo apt-get update && sudo apt-get upgrade -y
-```
-```bash
-sudo update-grub
-```
-```bash
-sudo do-release-upgrade
+sudo apt update
+sudo apt full-upgrade -y
+sudo apt autoremove --purge -y
 ```
 
-## Firewall
+RHEL 8+ / AlmaLinux / Rocky / Fedora:
+```bash
+sudo dnf upgrade --refresh -y
+sudo dnf autoremove -y
+```
 
+Legacy CentOS 7 / RHEL 7:
+```bash
+sudo yum update -y
+sudo yum autoremove -y
+```
+
+openSUSE Leap 15 / SLES 15:
+```bash
+sudo zypper refresh
+sudo zypper update -y
+```
+
+Arch / Manjaro:
+```bash
+sudo pacman -Syu
+sudo pacman -Qdtq | xargs -r sudo pacman -Rns
+```
+
+Verify and reboot (if kernel changed):
+```bash
+uname -r
+# verify per-family:
+dpkg -l 'linux-image-*' | grep '^ii'        # apt
+rpm -q kernel                                # dnf / yum
+rpm -q kernel-default                        # zypper
+pacman -Q linux                              # pacman
+sudo systemctl reboot
+```
+
+### Firewall
+
+Debian / Ubuntu (UFW):
 ```bash
 sudo apt install ufw -y
-```
-(for servers)
-```bash
-sudo ufw allow ssh
-```
-and/or (for clients)
-```bash
+sudo ufw default allow outgoing
 sudo ufw default deny incoming
-```
-```bash
+sudo ufw allow ssh        # for servers
 sudo ufw enable
-```
-Check software download server addresses to all be https;
-go through updates setup & install Ubuntu Pro.
-
-## PRO
-```bash
-sudo apt install ubuntu-advantage-tools -y
+sudo ufw status verbose
 ```
 
-Go to https://ubuntu.com/pro/dashboard, login with your account and use the cmd to attach.
+RHEL / Fedora / SUSE / Arch (firewalld):
 ```bash
-sudo pro attach <key>
-```
-OR USE
-```bash
-sudo pro attach
-```
-
-```bash
-sudo pro status
-```
-```bash
-sudo pro enable <service>
+sudo dnf install firewalld -y        # or yum / zypper / pacman
+sudo systemctl enable --now firewalld
+sudo firewall-cmd --add-service=ssh --permanent
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-all
 ```
 
-## DNSCRYPT
+### DNS-over-HTTPS (dnscrypt-proxy)
 
+Install:
 ```bash
+# apt
 sudo apt install dnscrypt-proxy -y
-```
-usually unnecessary:
-```bash
-sudo systemctl enable dnscrypt-proxy
-```
-
-Set nameserver 127.0.2.1 (in Network Manager and/or add to /etc/resolv.conf)
-```
-sudo nano /etc/resolv.conf
-```
-```
-nameserver 127.0.2.1
+# dnf / yum
+sudo dnf install dnscrypt-proxy -y
+# zypper
+sudo zypper install dnscrypt-proxy
+# pacman
+sudo pacman -S dnscrypt-proxy
 ```
 
-```bash
-sudo systemctl restart dnscrypt-proxy
-```
-```bash
-sudo systemctl restart NetworkManager
-```
+Point your system resolver at `127.0.0.2:53` (the listen address the
+script writes). This is intentional — it avoids the systemd-resolved
+stub on `127.0.0.53:53` and direct queries on `127.0.0.1`.
 
-
-## Tor
+### Tor
 
 ```bash
-sudo apt install tor -y
-```
-```bash
-sudo systemctl enable tor
-```
-
-Add to tor/torrc to route ALL possible traffic through tor:
-```
-sudo nano /etc/tor/torrc
-```
-```
-VirtualAddrNetwork 10.192.0.0/10
-AutomapHostsOnResolve 1
-TransPort 9040
-DNSPort 53
-```
-Restrict outbound traffic with iptables to **only** Tor (warning, some updates will not work):
-```bash
-sudo iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p udp --dport 80 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 9040
-sudo iptables -t nat -A OUTPUT -p udp --dport 443 -j REDIRECT --to-ports 9040
-```
-```
-sudo apt-get install iptables-persistent
-```
-```
-sudo netfilter-persistent save
-```
-That completes a DNS server on port 53 (for dnscrypt-proxy or dnsproxy) and Transparent proxy server: 127.0.0.1:9040
-
-```bash
-sudo systemctl restart tor
-```
-## System Logging
-
-To limit system file growth on Linux & if your drive is already getting full, run this script: [DeepClean](https://github.com/neohiro/ubuntu/blob/main/DeepClean.sh) (also available as a prompted category inside `ubuntuinstall.sh`)
-
-## Fail2BAN
-
-(only if you use remote ssh)
-```bash
-sudo apt install fail2ban -y
-```
-```bash
-sudo systemctl enable fail2ban
-```
-```bash
-sudo systemctl restart fail2ban
+# apt / dnf / yum / zypper
+sudo <pkgmgr> install -y tor
+# pacman (not in core — build from AUR)
+yay -S tor
+sudo systemctl enable --now tor
 ```
 
-## Automatic Security Updates
+### Automatic security updates
 
-Critical patches should never wait for you to remember them:
+Apt-based distros (Ubuntu / Debian):
 ```bash
 sudo apt install unattended-upgrades -y
-```
-```bash
 sudo dpkg-reconfigure --priority=low unattended-upgrades
 ```
-Choose **Yes** when asked.
 
-## Firmware, Secure Boot & Disk Encryption
+RHEL / Fedora / AlmaLinux / Rocky:
+```bash
+sudo dnf install dnf-automatic -y
+sudo systemctl enable --now dnf-automatic.timer
+# or dnf-automatic-install.timer for install-only
+```
 
-Update device firmware and confirm Secure Boot is active:
+openSUSE:
 ```bash
-sudo fwupdmgr refresh && sudo fwupdmgr update
+sudo zypper install yast2-online-update-configuration
+# configure: YaST2 → Online Update Configuration
 ```
+
+Arch:
 ```bash
-mokutil --sb-state
+yay -S aur-auto-update    # AUR helper
 ```
-Full-disk encryption (**LUKS**) must be chosen at install time — on the next reinstall tick it; it protects all data when the machine is powered off or stolen. Verify clock sync while you are at it:
+
+> `ubuntuinstall.sh` installs and configures `unattended-upgrades` only on
+> apt-based distros. On other families it prints a one-line suggestion
+> and skips.
+
+### Firmware, Secure Boot & Disk Encryption
+
+```bash
+sudo fwupdmgr refresh && sudo fwupdmgr update   # LVFS firmware
+mokutil --sb-state                              # Secure Boot state
+```
+
+Full-disk encryption (LUKS) must be chosen at install time — on the next
+reinstall tick it; it protects all data when the machine is powered off
+or stolen. Verify clock sync:
 ```bash
 timedatectl status
 ```
 
-## Kernel Hardening (sysctl)
+### Kernel Hardening (sysctl)
 
-Save as `/etc/sysctl.d/99-hardening.conf`:
+Save as `/etc/sysctl.d/99-hardening.conf` (identical on every distro):
 ```
 # information disclosure
 kernel.dmesg_restrict=1
@@ -300,34 +351,41 @@ net.ipv4.tcp_syncookies=1
 net.ipv6.conf.all.accept_redirects=0
 net.ipv6.conf.default.accept_redirects=0
 ```
-Apply it:
+
+Apply:
 ```bash
 sudo sysctl --system
 ```
 
-## AppArmor (Mandatory Access Control)
+### Mandatory Access Control: AppArmor vs SELinux
 
+| Family                 | MAC system   | Status              | Script action |
+|------------------------|--------------|---------------------|---------------|
+| Debian / Ubuntu        | AppArmor     | default on          | install apparmor + apparmor-utils, enable service |
+| openSUSE Leap / SLES   | AppArmor     | profiles available  | install apparmor-profiles + apparmor-utils, enable service |
+| Arch / Manjaro         | AppArmor     | AUR                 | print AUR hint (`yay -S apparmor apparmor-utils`) |
+| RHEL / Fedora / Alma / Rocky / CentOS | SELinux | default enforcing | skip AppArmor; check `getenforce` is `Enforcing` |
+
+On RHEL/Fedora, set permissive → enforcing with:
 ```bash
-sudo apt install apparmor apparmor-utils -y
+sudo setenforce 1
+# permanent: /etc/selinux/config  ->  SELINUX=enforcing  (then reboot)
 ```
-```bash
-sudo systemctl enable --now apparmor
-```
-Check profiles are loaded and switch individual ones to enforce mode:
+
+Check AppArmor profiles:
 ```bash
 sudo aa-status
-```
-```bash
 sudo aa-enforce /etc/apparmor.d/<profile>
 ```
 
-## SSH Hardening
+### SSH Hardening
 
-(only if you use remote ssh) Prefer keys over passwords:
+Prefer keys over passwords:
 ```bash
 ssh-keygen -t ed25519
 ```
-Then set in `/etc/ssh/sshd_config`:
+
+Then in `/etc/ssh/sshd_config`:
 ```
 PermitRootLogin no
 PasswordAuthentication no
@@ -337,75 +395,60 @@ LoginGraceTime 20
 X11Forwarding no
 AllowUsers <youruser>
 ```
+
 Validate before you disconnect:
 ```bash
-sudo sshd -t && sudo systemctl restart ssh
+sudo sshd -t && sudo systemctl restart sshd
 ```
 
-## Passwords, Lockouts & Sessions
+> The service unit is `ssh` on Debian/Ubuntu and `sshd` on RHEL/Fedora/
+> SUSE/Arch. The script detects both.
 
-Stronger password quality checks:
-```bash
-sudo apt install libpam-pwquality -y
-```
-In `/etc/security/pwquality.conf`:
+### Passwords, lockouts & sessions
+
+Stronger password quality — the script installs the right package per
+distro (`libpam-pwquality` on apt, `libpwquality` on dnf/yum/zypper/
+pacman). Then in `/etc/security/pwquality.conf`:
 ```
 minlen = 14
 minclass = 3
 maxrepeat = 3
 ```
-Lock accounts after failed logins — in `/etc/security/faillock.conf`:
+
+Lock accounts after failed logins — `/etc/security/faillock.conf`:
 ```
 deny = 5
 unlock_time = 900
 ```
+
 Auto-close idle shells — `/etc/profile.d/99-tmout.sh`:
 ```bash
 TMOUT=900; readonly TMOUT; export TMOUT
 ```
-Tighten default umask (`UMASK 027` in `/etc/login.defs`) and forbid core dumps — add to `/etc/security/limits.conf`:
+
+Tighten default umask (`UMASK 027` in `/etc/login.defs`) and forbid core
+dumps — add to `/etc/security/limits.conf`:
 ```
 * hard core 0
 ```
 
-## Reduce The Attack Surface
-
-See what is listening and decide whether it should be:
-```bash
-ss -tulnp
-```
-Disable daemons a desktop rarely needs (skip this on servers using them):
-
-Run this script to reduce surface attack and optimize linux: [OptimizeLinuxASR](https://github.com/neohiro/ubuntu/blob/main/OptimizeLinuxASR.sh) (also available as a prompted category inside `ubuntuinstall.sh`)
-
-Only allow listed users to schedule jobs:
-```bash
-sudo touch /etc/cron.allow && echo "$USER" | sudo tee /etc/cron.allow
-```
-Mask Ctrl+Alt+Del (physical reboot trigger):
-```bash
-sudo systemctl mask ctrl-alt-del.target
-```
-
-## Verify & Maintain
+### Verify & maintain
 
 ```bash
-sudo ufw status verbose
-```
-Rootkit sweep:
-```bash
-sudo apt install rkhunter -y && sudo rkhunter --check
-```
-For file-integrity baselining consider AIDE (`sudo apt install aide && sudo aideinit`). Re-check `ss -tulnp` after installing new software — every listener is another door.
-
-##
-```bash
-reboot
+sudo ufw status verbose                                # apt
+sudo firewall-cmd --list-all                            # everything else
+sudo rkhunter --check                                   # rootkit sweep
+sudo aide --check                                       # file integrity
+ss -tulnp                                               # re-check listeners
 ```
 
-Check directory for other Linux Ubuntu terminal tutorials
+## Additional helpers
 
-⭐ Stargaze to help others secure their Ubuntu install
+- **[Corrade.md](Corrade.md)** — Docker-based IR bot gateway (Docker required; works on all distros with `docker` installed).
+- **[DNSPROXY.md](DNSPROXY.md)** — AdGuard dnsproxy in Docker, with cross-distro firewall commands (UFW for apt, firewalld for dnf/yum/zypper/pacman).
+- **[SHADOWSOCKS-LIBEV.md](SHADOWSOCKS-LIBEV.md)** — Shadowsocks-libev SOCKS5 proxy, with cross-distro package names and firewall commands.
+
+⭐ Stargaze to help others secure their Linux install
 
 🔗 [frenzypenguin.media](https://linktr.ee/frenzypenguin.media)
 

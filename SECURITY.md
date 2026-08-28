@@ -2,7 +2,8 @@
 
 ## Supported versions
 
-Only the latest release available on the [Releases](../../releases) page is supported with security updates.
+Only the latest release available on the [Releases](../../releases) page
+is supported with security updates.
 
 ## Reporting a vulnerability
 
@@ -14,8 +15,12 @@ Please report security issues **privately**:
 
 Do **not** open a public issue for anything you believe is exploitable.
 
-You can expect an initial response within 7 days. Please allow a reasonable time for a fix before any public disclosure.
+You can expect an initial response within 7 days. Please allow a
+reasonable time for a fix before any public disclosure.
 
 ## Hardening notes
 
-This tool intentionally modifies system or network configuration. Always review what will be applied, keep backups/restoration points, and test on non-critical systems first.
+This tool intentionally modifies system or network configuration across
+multiple distribution families (Debian, RHEL/Fedora, SUSE, Arch). Always
+review what will be applied, keep backups/restoration points, and test
+on non-critical systems first.

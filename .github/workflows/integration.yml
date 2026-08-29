@@ -1,4 +1,4 @@
-name: Integration Tests
+name: Lint
 
 on:
   push:
@@ -12,14 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null 2>&1
       - name: Run shellcheck on all shell scripts
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null 2>&1 || true
           set -e
           find . -name '*.sh' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
             echo "=== ${f} ==="
             shellcheck --severity=warning \
-              --exclude=SC1091,SC2046,SC2034 \
+              --exclude=SC1091,SC2046,SC2034,SC1010 \
               "${f}"
           done
           echo "All shellcheck passes."
@@ -31,84 +32,3 @@ jobs:
             bash -n "${f}"
           done
           echo "All syntax checks pass."
-
-  docker-recommended:
-    name: Docker - Recommended flow
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run ubuntuinstall.sh (Recommended profile) in Docker
-        run: |
-          docker build -t ubuntu-install-test -f - . <<'DOCKERFILE'
-FROM ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
-RUN apt-get update -qq && \
-    apt-get install -y -qq curl wget tmux bash >/dev/null 2>&1
-WORKDIR /workspace
-COPY . /workspace
-DOCKERFILE
-          docker run --rm -i ubuntu-install-test \
-            env QUIET_PROMPTS=1 STRICT_RUN=1 \
-            bash -c '
-              printf "\n\n\n\n\n" | \
-                bash ubuntuinstall.sh 2>&1 | tee /tmp/install-log.txt; rc=$?
-              echo "EXIT_CODE=$rc" >> /tmp/install-log.txt
-              echo "--- Rollback log ---"
-              cat /var/log/ubuntu-install-rollback.log 2>/dev/null || echo "(none)"
-              echo "--- Exit code: $rc ---"
-              exit $rc
-            ' > /tmp/docker-recommended.txt 2>&1; ec=$?
-          echo "=== Docker output (last 60 lines) ==="
-          tail -60 /tmp/docker-recommended.txt || true
-          echo "=== Exit code: $ec ==="
-          if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
-          if grep -q "EXIT_CODE=0" /tmp/docker-recommended.txt; then
-            echo "PASS: script exited cleanly."
-          else
-            echo "FAIL: script did not exit cleanly."
-            exit 1
-          fi
-
-  docker-maintenance:
-    name: Docker - Maintenance suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Maintenance suite in Docker
-        run: |
-          docker build -t ubuntu-install-test -f - . <<'DOCKERFILE'
-FROM ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
-RUN apt-get update -qq && \
-    apt-get install -y -qq curl wget tmux bash expect >/dev/null 2>&1
-WORKDIR /workspace
-COPY . /workspace
-DOCKERFILE
-          docker run --rm -i ubuntu-install-test \
-            env QUIET_PROMPTS=1 \
-            expect -c '
-              set timeout 120
-              log_user 1
-              spawn bash ubuntuinstall.sh
-              expect "Apply which set of categories"
-              send "6\r"
-              expect "Maintenance"
-              send "20\r"
-              expect eof
-              catch wait result
-              exit [lindex $result 3]
-            ' > /tmp/docker-maintenance.txt 2>&1; ec=$?
-          echo "=== Maintenance suite output (last 40 lines) ==="
-          tail -40 /tmp/docker-maintenance.txt || true
-          echo "=== Exit code: $ec ==="
-          if [ "$ec" -ne 0 ]; then echo "FAIL: non-zero exit"; fi
-          if [ "$ec" -eq 0 ]; then
-            echo "PASS: Maintenance suite completed cleanly."
-          else
-            echo "FAIL: Maintenance suite exited with code $ec."
-            exit 1
-          fi

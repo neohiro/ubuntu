@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 #
 # neohiro/linux  -  general interactive setup & hardening script
 # Auto-detects Ubuntu / Debian / RHEL / AlmaLinux / Rocky / Fedora /
@@ -8,7 +8,7 @@
 # Run as root:   sudo bash linuxinstall.sh
 #
 
-REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/ubuntu/main}"
+REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/neohiro/linux/main}"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 ORIG_CWD="$(pwd)"
 
@@ -68,8 +68,8 @@ else
 fi
 unset _NEOHIRO_LIB_DIR
 
-RECOVERY_CMD="tmux attach -t ubuntu-setup   # reconnect after SSH disconnect"
-ROLLBACK_LOG="${ROLLBACK_LOG:-/var/log/ubuntu-install-rollback.log}"
+RECOVERY_CMD="tmux attach -t linux-setup   # reconnect after SSH disconnect"
+ROLLBACK_LOG="${ROLLBACK_LOG:-/var/log/linux-install-rollback.log}"
 
 # Ensure the rollback log exists and is writable before any backup is recorded.
 # Creates it with 0600 mode (owner-only) to avoid leaking paths to other users.
@@ -218,7 +218,7 @@ _ssh_safe_restart() {
 
   # Validate before touching anything.
   if ! sudo sshd -t 2>&1; then
-    err "sshd config invalid â€” NOT restarting. Reverting."
+    err "sshd config invalid — NOT restarting. Reverting."
     [ -n "$backup" ] && [ -f "$backup" ] \
       && run sudo cp -f "$backup" "$sshcfg"
     return 1
@@ -234,15 +234,15 @@ _ssh_safe_restart() {
   # No reload support: do a restart.  Warn the user the session will
   # briefly drop.  Because ensure_tmux_if_ssh wraps the whole run in tmux,
   # a dropped SSH session can be recovered with `tmux attach`.
-  warn "sshd reload not supported â€” restarting. You may briefly lose this SSH session."
-  warn "Recover with:  tmux attach -t ubuntu-setup"
+  warn "sshd reload not supported — restarting. You may briefly lose this SSH session."
+  warn "Recover with:  tmux attach -t linux-setup"
   if ! sudo systemctl restart "$unit" 2>&1; then
-    err "sshd restart failed â€” reverting config."
+    err "sshd restart failed — reverting config."
     [ -n "$backup" ] && [ -f "$backup" ] \
       && run sudo cp -f "$backup" "$sshcfg"
     return 1
   fi
-  ok "SSH restarted. If disconnected, run:  tmux attach -t ubuntu-setup"
+  ok "SSH restarted. If disconnected, run:  tmux attach -t linux-setup"
 }
 _sshd_unit() {
   if systemctl is-active --quiet sshd 2>/dev/null; then echo sshd; return 0; fi
@@ -275,17 +275,17 @@ ensure_tmux_if_ssh() {
   # by absolute path; on clean exit it tears the tmux session down.
   local inner
   inner=$(cat <<'INNER_EOF'
-trap 'tmux kill-session -t ubuntu-setup 2>/dev/null' EXIT
+trap 'tmux kill-session -t linux-setup 2>/dev/null' EXIT
 cd "$1" && shift
 bash "$1" "$@"
 rc=$?
 if [ "$rc" -eq 0 ]; then
-  tmux kill-session -t ubuntu-setup 2>/dev/null
+  tmux kill-session -t linux-setup 2>/dev/null
 fi
 exit "$rc"
 INNER_EOF
 )
-  exec tmux new-session -A -s ubuntu-setup -n setup \
+  exec tmux new-session -A -s linux-setup -n setup \
     "cd $(printf '%q' "$ORIG_CWD") && bash $(printf '%q' "$SCRIPT_PATH")"
 }
 
@@ -404,7 +404,7 @@ _take_etc_snapshot() {
   snap_path="${snap_dir}/etc-$(date +%s%N).tar.gz"
 
   if ! sudo mkdir -p "$snap_dir" 2>/dev/null; then
-    warn "Cannot create $snap_dir â€” /etc snapshot skipped."
+    warn "Cannot create $snap_dir — /etc snapshot skipped."
     return 0
   fi
 
@@ -419,7 +419,7 @@ _take_etc_snapshot() {
      -C / etc 2>/dev/null; then
     sudo chmod 600 "$snap_path"
     _ETC_SNAPSHOT_PATH="$snap_path"
-    # Remove all older snapshots (by name â€” nanos in name makes name-order
+    # Remove all older snapshots (by name — nanos in name makes name-order
     # equivalent to time-order; mtime would be wasted I/O).
     local prev
     while IFS= read -r prev; do
@@ -430,7 +430,7 @@ _take_etc_snapshot() {
     info "  (May need sudo systemd-resolve --reload if /etc/resolv.conf was reverted)"
   else
     sudo rm -f "$snap_path" 2>/dev/null
-    warn "Failed to create /etc snapshot â€” continuing without it."
+    warn "Failed to create /etc snapshot — continuing without it."
   fi
 }
 
@@ -574,7 +574,7 @@ USE_REMOTE_SSH=""
 FULL_AUTO=0  # set to 1 when Full profile on a server so SSH hardening runs auto
 SSH_AUTO_MODE=0
 _KERNEL_UPDATE_PENDING=0  # set to 1 by update_kernel; consumed by _print_run_summary
-# â”€â”€ Cross-distro package-manager and distro detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Cross-distro package-manager and distro detection ──────────────────────
 # Detected once at script start; every other function reads $PKG_MGR / $DISTRO.
 DRY_RUN=0           # set to 1 to preview without executing
 STEP_MODE=0         # set to 1 to run a single named step
@@ -632,12 +632,12 @@ pkg_update() {
     apt)    run sudo env DEBIAN_FRONTEND=noninteractive apt-get update ;;
     dnf)    info "Checking for updates (dnf check-update)..."
                sudo dnf check-update >/dev/null 2>&1; rc=$?
-               [ "$rc" -eq 100 ] && ok "Updates available â€” will upgrade." \
+               [ "$rc" -eq 100 ] && ok "Updates available — will upgrade." \
                || [ "$rc" -eq 0 ] && ok "System up to date." \
                || info "dnf check-update exited $rc." ;;
     yum)    info "Checking for updates (yum check-update)..."
                sudo yum check-update >/dev/null 2>&1; rc=$?
-               [ "$rc" -eq 100 ] && ok "Updates available â€” will upgrade." \
+               [ "$rc" -eq 100 ] && ok "Updates available — will upgrade." \
                || [ "$rc" -eq 0 ] && ok "System up to date." \
                || info "yum check-update exited $rc." ;;
     zypper) run sudo zypper --quiet refresh ;;
@@ -689,7 +689,7 @@ pkg_is_installed() {
   esac
 }
 
-# â”€â”€ Firewall helpers (UFW on apt; firewalld everywhere else) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Firewall helpers (UFW on apt; firewalld everywhere else) ───────────
 FW_CMD=""   # ufw | firewall-cmd
 
 _fw_detect() {
@@ -957,9 +957,9 @@ _step_begin() {
   local key="$1" label="$2" preview="$3"
   mark_step "$key" running
   show_progress
-  local _hr="â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
-  printf '\n%s\n' "$(_c '1;1;36m' "  â–¸ $label")"
-  [ -n "$preview" ] && printf '  %s %s\n' "$(_c '1;30m' 'â†’')" "$(_c '1;37m' "$preview")"
+  local _hr="────────────────────────────────────────────────────────────────"
+  printf '\n%s\n' "$(_c '1;1;36m' "  ▸ $label")"
+  [ -n "$preview" ] && printf '  %s %s\n' "$(_c '1;30m' '→')" "$(_c '1;37m' "$preview")"
   printf '%s\n' "$_hr"
 }
 
@@ -1000,7 +1000,7 @@ _valid_step() {
   return 1
 }
 
-# Short preview text for each step â€” printed before the step runs.
+# Short preview text for each step — printed before the step runs.
 # Keep entries under ~70 chars so the terminal doesn't wrap.
 declare -A _STEP_PREVIEWS
 _STEP_PREVIEWS["system"]="apt update + upgrade, install base packages (curl, fail2ban, etc.)."
@@ -1128,7 +1128,7 @@ print_metrics_summary() {
 
 print_welcome() {
   local _hr
-  _hr="$(printf 'â”€%.0s' {1..58})"
+  _hr="$(printf '─%.0s' {1..58})"
   local _os_label _kernel _hostname
   _os_label="$(awk -F= '/^NAME=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || uname -s)"
   _kernel="$(uname -r)"
@@ -1140,9 +1140,9 @@ print_welcome() {
     3) _step_count=12 _ssh_note="(includes SSH hardening + Tor)" ;;
     *) _step_count=0 _ssh_note="" ;;
   esac
-  printf '\n%s\n' "$(_c '1;36m' "  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")"
-  printf '%s\n' "$(_c '1;36m' "  â•‘          neohiro/linux  â€”  Setup & Hardening             â•‘")"
-  printf '%s\n' "$(_c '1;36m' "  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")"
+  printf '\n%s\n' "$(_c '1;36m' "  ╔══════════════════════════════════════════════════════════╗")"
+  printf '%s\n' "$(_c '1;36m' "  ║          neohiro/linux  —  Setup & Hardening             ║")"
+  printf '%s\n' "$(_c '1;36m' "  ╚══════════════════════════════════════════════════════════╝")"
   printf '\n  %-14s %s\n' "$(_c '1;30m' 'Host:')" "$(_c '1;37m' "$_hostname")"
   printf '  %-14s %s\n' "$(_c '1;30m' 'OS:')" "$(_c '1;37m' "$_os_label")"
   printf '  %-14s %s\n' "$(_c '1;30m' 'Kernel:')" "$(_c '1;37m' "$_kernel")"
@@ -1151,16 +1151,16 @@ print_welcome() {
   printf '\n  %s\n' "$_hr"
   printf '  %-14s %s\n' "$(_c '1;30m' 'Environment:')" "$ENV_TYPE"
   printf '  %-14s %s\n' "$(_c '1;30m' 'Remote SSH:')" "$(_c '1;37m' "$USE_REMOTE_SSH")"
-  printf '  %-14s %s\n' "$(_c '1;30m' 'Profile:')" "$(_c '1;37m' "Profile $REPLY_PROFILE â€” $(_profile_label)")"
+  printf '  %-14s %s\n' "$(_c '1;30m' 'Profile:')" "$(_c '1;37m' "Profile $REPLY_PROFILE — $(_profile_label)")"
   if [ "$_step_count" -gt 0 ]; then
     printf '  %-14s %s\n' "$(_c '1;30m' 'Steps:')" "$(_c '1;37m' "~$_step_count hardening steps $_ssh_note")"
   fi
   if [ "$QUICK_MODE" = "1" ]; then
-    printf '  %-14s %s\n' "$(_c '1;32m' 'Quick mode:')" "$(_c '1;32m' 'ON â€” using defaults, no individual prompts')"
+    printf '  %-14s %s\n' "$(_c '1;32m' 'Quick mode:')" "$(_c '1;32m' 'ON — using defaults, no individual prompts')"
   fi
   printf '  %s\n' "$_hr"
   if [ -n "${TMUX:-}" ]; then
-    info "Running inside tmux â€” your session is protected against SSH disconnection."
+    info "Running inside tmux — your session is protected against SSH disconnection."
   fi
 }
 
@@ -1201,11 +1201,11 @@ detect_or_ask_env() {
 }
 
 ask_profile() {
-  local _hr="â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
+  local _hr="──────────────────────────────────────────────────────────"
   bold "Profile selection"
   info "Choose how much hardening to apply. All changes are logged and reversible."
   printf '\n'
-  printf '  %s  %s\n' "$(_c '1;32m' '1) Recommended')" "$(_c '1;37m' 'Safe defaults â€” firewall, system updates, unattended upgrades.')"
+  printf '  %s  %s\n' "$(_c '1;32m' '1) Recommended')" "$(_c '1;37m' 'Safe defaults — firewall, system updates, unattended upgrades.')"
   printf '  %s        %s\n' "" "$(_c '1;30m' 'No risk of SSH lockout.  ~6 steps.  Takes 1-3 min.')"
   printf '\n'
   printf '  %s  %s\n' "$(_c '1;36m' '2) Standard')"   "$(_c '1;37m' 'Recommended + SSH hardening, Fail2ban, kernel sysctls,')"
@@ -1221,7 +1221,7 @@ ask_profile() {
   printf '  %s        %s\n' "" "$(_c '1;30m' 'Also reinstalls the SSH self-heal watchdog if you want.')"
   printf '\n'
   printf '  %s  %s\n' "$(_c '1;1;35m' '6) Maintenance')" "$(_c '1;37m' '20 individual tools: inspect, update, recover, optimize.')"
-  printf '  %s        %s\n' "" "$(_c '1;30m' 'Persistent menu â€” go in and out without restarting.')"
+  printf '  %s        %s\n' "" "$(_c '1;30m' 'Persistent menu — go in and out without restarting.')"
   printf '\n'
   printf '  %s\n' "$_hr"
   prompt_choice "Apply which set of categories?" \
@@ -1233,7 +1233,7 @@ ask_profile() {
     "Maintenance suite (pick individual categories, return to this menu)"
   REPLY_PROFILE=$REPLY_CHOICE
   if [ "$QUICK_MODE" = "1" ] && [ "$REPLY_PROFILE" = "4" ]; then
-    info "Quick mode: individual prompts skipped â€” using recommended defaults."
+    info "Quick mode: individual prompts skipped — using recommended defaults."
     info "Override individual steps with STRICT_RUN=1 if needed."
   fi
 }
@@ -1241,7 +1241,7 @@ ask_profile() {
 ask_category_enabled() {
   local key="$1" desc="$2" default="$3"
   _should_run_step "$key" || return 1
-  # In QUICK_MODE with Custom profile (4), skip individual prompts â€” use defaults.
+  # In QUICK_MODE with Custom profile (4), skip individual prompts — use defaults.
   if [ "$QUICK_MODE" = "1" ] && [ "$REPLY_PROFILE" = "4" ]; then
     [ "$default" = "y" ] && return 0 || return 1
   fi
@@ -1323,9 +1323,9 @@ _maintenance_list_keys() {
 _maintenance_logs() {
   msg "Recent rollback and self-heal log entries"
   echo
-  if [ -f /var/log/ubuntu-install-rollback.log ]; then
+  if [ -f /var/log/linux-install-rollback.log ]; then
     info "=== Rollback log (last 20 lines) ==="
-    tail -n 20 /var/log/ubuntu-install-rollback.log 2>/dev/null | sed 's/^/  /'
+    tail -n 20 /var/log/linux-install-rollback.log 2>/dev/null | sed 's/^/  /'
   else
     info "Rollback log not found."
   fi
@@ -1359,8 +1359,8 @@ _maintenance_sysinfo() {
 maintenance_menu() {
   local choice rc
   while true; do
-    printf '\n%s\n' "$(_c '1;35m' 'â”â”â” Maintenance suite â”â”â”')"
-    prompt_choice "Maintenance â€” pick a category (20=exit)" \
+    printf '\n%s\n' "$(_c '1;35m' '━━━ Maintenance suite ━━━')"
+    prompt_choice "Maintenance — pick a category (20=exit)" \
       "System update (apt update + upgrade + base packages)" \
       "DNSCrypt (DNS encryption)" \
       "Firewall (UFW)" \
@@ -1469,7 +1469,7 @@ update_kernel() {
   local uname_r
   uname_r="$(uname -r)"
 
-  # â”€â”€ APT (Debian / Ubuntu / derivatives) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # ── APT (Debian / Ubuntu / derivatives) ──────────────────────────
   if command -v apt >/dev/null 2>&1; then
     info "Package manager: apt ($(lsb_release -ds 2>/dev/null || uname -sr))"
 
@@ -1486,7 +1486,7 @@ update_kernel() {
       ok "Kernel already up to date (running: $uname_r)."
     else
       if [ -n "$cand" ] && [ -n "$installed" ]; then
-        info "  linux-image-generic: ${installed} â†’ ${cand}"
+        info "  linux-image-generic: ${installed} → ${cand}"
       fi
 
       # Disable livepatch so it does not block new kernel activation.
@@ -1498,13 +1498,13 @@ update_kernel() {
       # metapackages, transitional packages, and any kernel-module stubs.
       info "Running apt full-upgrade..."
       if ! run sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade; then
-        err "apt full-upgrade failed â€” existing kernel is untouched."
+        err "apt full-upgrade failed — existing kernel is untouched."
         return 1
       fi
       metrics_add pkgs_upgraded 1
     fi
 
-    # â”€â”€ Prune old kernels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Prune old kernels ─────────────────────────────────────────
     # Keep at least 2 kernels (current + one fallback).  Removing
     # only the meta-packages leaves the actual vmlinuz/initrd files
     # dangling, so we target linux-image-* and linux-headers-* directly.
@@ -1536,7 +1536,7 @@ update_kernel() {
       info "  No additional kernels to prune."
     fi
 
-    # â”€â”€ DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── DNF (RHEL 8+ / AlmaLinux / Rocky / Fedora) ──────────────
   elif command -v dnf >/dev/null 2>&1; then
     info "Package manager: dnf"
     if ! run sudo dnf upgrade --refresh -y; then
@@ -1546,7 +1546,7 @@ update_kernel() {
     run sudo dnf autoremove -y
     metrics_add pkgs_upgraded 1
 
-    # â”€â”€ YUM (legacy CentOS 7 / RHEL 7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── YUM (legacy CentOS 7 / RHEL 7) ──────────────────────────
   elif command -v yum >/dev/null 2>&1; then
     info "Package manager: yum"
     if ! run sudo yum update -y; then
@@ -1556,7 +1556,7 @@ update_kernel() {
     run sudo yum autoremove -y
     metrics_add pkgs_upgraded 1
 
-    # â”€â”€ Unsupported â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Unsupported ───────────────────────────────────────────────
   else
     err "No supported package manager (apt/dnf/yum) found."
     return 1
@@ -1571,7 +1571,7 @@ update_kernel() {
   esac
   new_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
   if [ -n "$new_kernel" ] && [ "$new_kernel" != "$uname_r" ]; then
-    ok "Kernel updated: running $uname_r â†’ installed $new_kernel (reboot to activate)."
+    ok "Kernel updated: running $uname_r → installed $new_kernel (reboot to activate)."
     info "  After reboot: uname -r  &&  $verify_cmd"
     _KERNEL_UPDATE_PENDING=1
   else
@@ -1715,7 +1715,7 @@ setup_dnscrypt() {
   # 127.0.0.2:53, the conflict is harmless; but warn if something else
   # is already on 127.0.0.2:53 (rare but possible).
   if _is_listening "53/udp"; then
-    info "Port 53 is already in use on this host â€” dnscrypt-proxy binds to 127.0.0.2:53 (different IP), so this is usually fine."
+    info "Port 53 is already in use on this host — dnscrypt-proxy binds to 127.0.0.2:53 (different IP), so this is usually fine."
     if ss -lnH -u 2>/dev/null | awk '{print $4}' | grep -qE '127\.0\.0\.2:53$'; then
       err "Another process is already listening on 127.0.0.2:53 (udp). dnscrypt-proxy will not start."
       return 1
@@ -1730,10 +1730,10 @@ setup_dnscrypt() {
   if [ ! -f "$_conf" ]; then
     # Neither exists: create the parent dir and write a minimal working config.
     _conf="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
-    info "No config found â€” generating minimal $_conf"
+    info "No config found — generating minimal $_conf"
     run sudo mkdir -p "${_conf%/*}"
     run sudo tee "$_conf" >/dev/null <<'EOF'
-# Minimal dnscrypt-proxy config â€” auto-generated by linuxinstall.sh
+# Minimal dnscrypt-proxy config — auto-generated by linuxinstall.sh
 listen_addresses = ['127.0.0.2:53']
 dnscrypt_proxy_servers
 [static]
@@ -1742,7 +1742,7 @@ dnscrypt_proxy_servers
 EOF
   fi
   if [ ! -f "$_conf" ]; then
-    err "Could not create $_conf â€” giving up."
+    err "Could not create $_conf — giving up."
     return 1
   fi
   if [ ! -f /var/backups/dnscrypt-proxy.toml.bak ]; then
@@ -1781,12 +1781,12 @@ setup_firewall() {
       info "Install firewalld or ufw manually and re-run."
       return 1 ;;
   esac
-  # Ensure the SSH port (whatever it is â€” 22, 2222, or a custom value)
+  # Ensure the SSH port (whatever it is — 22, 2222, or a custom value)
   # is open in BOTH IPv4 and IPv6 before we apply default-deny.
   # This is the single most important anti-lockout call in the script.
   if [ "$USE_REMOTE_SSH" = "yes" ] || [ "$ENV_TYPE" = "server" ]; then
     if ! _ssh_guard; then
-      err "SSH port not guarded â€” aborting firewall setup to prevent lockout."
+      err "SSH port not guarded — aborting firewall setup to prevent lockout."
       return 1
     fi
   fi
@@ -1826,7 +1826,7 @@ setup_tor() {
       "Leave /etc/tor/torrc untouched"
     # Pre-check: warn if common Tor ports are already in use.
     case "$REPLY_CHOICE" in
-      0)  _is_listening 9050 && warn "Port 9050 (Tor SOCKS) is already in use â€” transparent proxy may conflict." ;;
+      0)  _is_listening 9050 && warn "Port 9050 (Tor SOCKS) is already in use — transparent proxy may conflict." ;;
       1|2) _is_listening 9001 && _is_listening 9030 \
               && warn "Ports 9001/9030 (common Tor OR/Dir ports) are already in use." ;;
     esac
@@ -2738,11 +2738,11 @@ run_deepclean() {
   run_remote_script "DeepClean.sh"
 }
 
-# ask_other_scripts() removed â€” linux repo does not carry ubuntusocks.sh
+# ask_other_scripts() removed — linux repo does not carry ubuntusocks.sh
 # or linuxinstallserver.sh. Expand via PR when those are cross-distro-ported.
 
 # --- Rollback mode ---
-# Reads /var/log/ubuntu-install-rollback.log (format: original<TAB>backup)
+# Reads /var/log/linux-install-rollback.log (format: original<TAB>backup)
 # and either dry-prints the inverse `cp` commands or, with --apply, runs
 # them in reverse order so the latest backup wins. Skips entries whose
 # backup no longer exists, logs everything it does.
@@ -3116,7 +3116,7 @@ restore_ssh_mode() {
     done
     if [ "$ak_count" -eq 0 ]; then
       FIXES+=("reenable-password-auth")
-      err "PasswordAuthentication is no AND no pubkeys are installed â€” you are locked out by OpenSSH."
+      err "PasswordAuthentication is no AND no pubkeys are installed — you are locked out by OpenSSH."
     else
       info "PasswordAuthentication is no but $ak_count pubkey(s) are present (OK if you connect via Tailscale SSH or a pubkey-capable client)."
     fi
@@ -3139,9 +3139,9 @@ restore_ssh_mode() {
   fi
 
   # 5) Restore from rollback log if present
-  if [ -f /var/log/ubuntu-install-rollback.log ]; then
+  if [ -f /var/log/linux-install-rollback.log ]; then
     info "Rollback log present:"
-    grep -E 'ssh' /var/log/ubuntu-install-rollback.log 2>/dev/null | sed 's/^/    /' || true
+    grep -E 'ssh' /var/log/linux-install-rollback.log 2>/dev/null | sed 's/^/    /' || true
   fi
 
   # 6) Apply proposed fixes
@@ -3307,7 +3307,7 @@ Usage: sudo bash linuxinstall.sh [--dry-run] [--step STEP] [--restore-ssh] [--re
                     not cover the damage.
                     Usage: sudo bash linuxinstall.sh --restore-etc-snapshot
   --rollback        Dry-prints the inverse cp commands needed to undo
-                    every change recorded in /var/log/ubuntu-install-rollback.log.
+                    every change recorded in /var/log/linux-install-rollback.log.
   --rollback --apply  Run those cp commands (latest backup wins).
   -h, --help        Show this help.
 USAGE
@@ -3446,10 +3446,10 @@ _print_run_summary() {
   else
     total_time_str="${total_sec}s"
   fi
-  local _hr="â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
-  printf '\n%s\n' "$(_c '1;36m' "  â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")"
-  printf '%s\n' "$(_c '1;36m' "  â•‘               âœ“  Run complete  â€”  $total_time_str                 â•‘")"
-  printf '%s\n' "$(_c '1;36m' "  â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")"
+  local _hr="════════════════════════════════════════════════════════════"
+  printf '\n%s\n' "$(_c '1;36m' "  ╔══════════════════════════════════════════════════════════╗")"
+  printf '%s\n' "$(_c '1;36m' "  ║               ✓  Run complete  —  $total_time_str                 ║")"
+  printf '%s\n' "$(_c '1;36m' "  ╚══════════════════════════════════════════════════════════╝")"
   printf '\n'
   print_metrics_summary
   mark_step summary "done"
@@ -3460,17 +3460,17 @@ _print_run_summary() {
     printf '  Restore whole /etc:  sudo bash %q --restore-etc-snapshot\n' "$SCRIPT_PATH"
   fi
   # If update_kernel staged a new image, offer a reboot once we are
-  # back at the prompt. Never auto-reboot â€” connection loss during the
+  # back at the prompt. Never auto-reboot — connection loss during the
   # rest of the run is the bigger risk.
   if [ "${_KERNEL_UPDATE_PENDING:-0}" = "1" ]; then
-    printf '\n  %s\n' "$(_c '1;33m' 'â”â”â” KERNEL REBOOT REQUIREDâ”â”â”')"
+    printf '\n  %s\n' "$(_c '1;33m' '━━━ KERNEL REBOOT REQUIRED━━━')"
     printf '%s\n' "  A new kernel is installed but not yet running."
     printf '  Currently running: %s\n' "$(_c '1;37m' "$(uname -r)")"
     local _boot_kernel
     _boot_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)"
     printf '  Highest installed: %s\n' "$(_c '1;37m' "${_boot_kernel:-unknown}")"
     if [ -t 0 ] && prompt_yn "Reboot now to activate the new kernel?" "n"; then
-      warn "Rebooting in 5 seconds â€” Ctrl-C to cancel."
+      warn "Rebooting in 5 seconds — Ctrl-C to cancel."
       sleep 5
       run sudo systemctl reboot
     else
@@ -3482,7 +3482,7 @@ _print_run_summary() {
   # that a check is scheduled at every boot and every minute -- so even a
   # full-disconnect lockout will recover automatically.
   if [ "${_SELF_HEAL_INSTALLED:-0}" = "1" ]; then
-    printf '\n  %s\n' "$(_c '1;36m' 'â”â”â” SSH SELF-HEAL GUARD ARMED â”â”â”')"
+    printf '\n  %s\n' "$(_c '1;36m' '━━━ SSH SELF-HEAL GUARD ARMED ━━━')"
     if [ -f /etc/systemd/system/neohiro-ssh-watchdog.timer ]; then
       printf '%s\n' "  An SSH self-heal run is scheduled at every reboot and every 60s."
       printf '  Watchdog: %s\n' "$(_c '1;37m' 'systemd timer neohiro-ssh-watchdog.timer')"
@@ -3506,5 +3506,3 @@ _print_run_summary() {
 }
 
 main "$@"
-
-# test trigger

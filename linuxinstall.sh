@@ -3506,3 +3506,5 @@ _print_run_summary() {
 }
 
 main "$@"
+
+# test trigger

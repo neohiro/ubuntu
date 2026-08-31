@@ -4,7 +4,7 @@
 > All content has moved to **[neohiro/linux](https://github.com/neohiro/linux)**.
 > The `neohiro/linux` repo now covers Ubuntu and all other Linux distributions
 > in a single cross-distro script. Install URL unchanged:
-> `curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/install.sh | sudo bash`
+> `curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/linuxinstall.sh | sudo bash -s --`
 >
 > Issues, PRs, and new work are closed here. Redirect all contributions to
 > **[neohiro/linux](https://github.com/neohiro/linux)**.

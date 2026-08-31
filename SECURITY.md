@@ -15,6 +15,8 @@ Please report security issues **privately**:
 
 Do **not** open a public issue for anything you believe is exploitable.
 
+For issues that cannot use GitHub Security Advisories, email `security@neohiro.io` (PGP key on request). All reports get an acknowledgement within 72 hours.
+
 You can expect an initial response within 7 days. Please allow a
 reasonable time for a fix before any public disclosure.
 
@@ -24,3 +26,7 @@ This tool intentionally modifies system or network configuration across
 multiple distribution families (Debian, RHEL/Fedora, SUSE, Arch). Always
 review what will be applied, keep backups/restoration points, and test
 on non-critical systems first.
+
+---
+
+Maintained by **[neohiro](https://github.com/neohiro)**.

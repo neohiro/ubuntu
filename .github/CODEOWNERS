@@ -1,0 +1,12 @@
+# CODEOWNERS — neohiro/ubuntu
+#
+# Ubuntu-specific install scripts.
+# All changes reviewed by @neohiro.
+
+# Default owners
+* @neohiro
+
+# Install scripts — operator-critical, require review
+ubuntuinstall.sh @neohiro
+ubuntuinstallserver.sh @neohiro
+*.sh @neohiro

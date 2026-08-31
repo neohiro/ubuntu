@@ -1,0 +1,19 @@
+name: Bug report
+description: Report an issue with the Ubuntu install or harden scripts
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting. Please describe the issue and your Ubuntu version.
+  - type: dropdown
+    id: distro
+    attributes:
+      label: Ubuntu version
+      options: ["24.04 LTS","22.04 LTS","20.04 LTS","Other"]
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      render: shell
+    validations:
+      required: true

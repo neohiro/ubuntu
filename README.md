@@ -1,4 +1,14 @@
-﻿# neohiro/linux
+# neohiro/linux
+
+> **DEPRECATED — This repository is archived (2026-08-31).**
+> All content has moved to **[neohiro/linux](https://github.com/neohiro/linux)**.
+> The `neohiro/linux` repo now covers Ubuntu and all other Linux distributions
+> in a single cross-distro script. Install URL unchanged:
+> `curl -fsSL https://raw.githubusercontent.com/neohiro/linux/main/install.sh | sudo bash`
+>
+> Issues, PRs, and new work are closed here. Redirect all contributions to
+> **[neohiro/linux](https://github.com/neohiro/linux)**.
+
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgray.svg)](https://github.com/)
 [![Supported distros](https://img.shields.io/badge/distros-Ubuntu%20%7C%20Debian%20%7C%20RHEL%20%7C%20Fedora%20%7C%20SUSE%20%7C%20Arch%20%7C%20Amazon%20Linux-blue.svg)](#supported-distributions)
 
@@ -514,5 +524,5 @@ ss -tulnp                                               # re-check listeners
 
 - 💖 [Sponsor neohiro on GitHub](https://github.com/sponsors/neohiro) — covers API + hosting costs
 - 🌐 [neohiro.github.io](https://neohiro.github.io/) — main site
-- 🎬 [FrenzyPenguin Media](https://neohiro.github.io/frenzypenguin-media/) — video deep-dives
+- 🎬 [FrenzyPenguin Media](https://frenzypenguin-media.github.io/) — video deep-dives
 - 🧬 [transhumanists](https://transhumanists.github.io/) — companion dashboard for human progress
